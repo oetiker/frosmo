@@ -48,9 +48,13 @@ Add to Home Screen**. After that it runs fullscreen, and offline: the service
 worker precaches the whole app on first visit, so the tablet on the kitchen
 table needs no network and no server at all.
 
-Every push to `main` republishes it. `npm run build` produces a fully static
-`dist/` with relative asset paths, so it serves correctly from a sub-path like
-`/frosmo/` or from any other static host you point at it.
+Every push to `main` republishes it, via `.github/workflows/pages.yml`. That
+needs Pages switched on once, in **Settings › Pages › Build and deployment ›
+Source › GitHub Actions** — a workflow cannot enable it for you.
+
+`npm run build` produces a fully static `dist/` with relative asset paths, so
+it serves correctly from a sub-path like `/frosmo/`, or from any other static
+host you point at it.
 
 For development, note that `getUserMedia` needs a secure context, and iPadOS
 gives no localhost exemption to another machine on the LAN — `npm run dev --host`

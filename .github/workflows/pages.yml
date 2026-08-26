@@ -30,11 +30,15 @@ jobs:
       # than not deploying, so the tests gate the publish too.
       - run: npm test
       - run: npm run build
+      # Pages has to be switched on once, by a human, in
+      # Settings › Pages › Build and deployment › Source › GitHub Actions.
+      # This step's `enablement: true` option is meant to do that
+      # automatically, but creating a Pages site is not something a workflow's
+      # GITHUB_TOKEN is permitted to do ("Resource not accessible by
+      # integration"), so it only turned a missing setting into a confusing
+      # failure. Once the setting is on, this step is a no-op that just reads
+      # the site's configuration back.
       - uses: actions/configure-pages@v5
-        with:
-          # Turns Pages on for the repository the first time this runs, so
-          # there is no manual setup step before the first deploy.
-          enablement: true
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist
