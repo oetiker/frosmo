@@ -11,7 +11,7 @@
  */
 
 import type { Blob } from "./blobs.js";
-import { labelBlobs } from "./blobs.js";
+import { createLabelScratch, labelBlobs, type LabelScratch } from "./blobs.js";
 import type { Camera } from "./camera.js";
 import { boardSize, boardToCamera, type Calibration } from "./calibration.js";
 import { classifyColor, type TokenColor } from "./color.js";
@@ -94,6 +94,10 @@ export class VisionPipeline {
   private inkDetector: InkDetector | null = null;
   private solid: Mask | null = null;
   private field: Float32Array | null = null;
+  /** Working buffers for the stages that need one, allocated with the board. */
+  private blurScratch: Float32Array | null = null;
+  private labelScratch: LabelScratch | null = null;
+  private contourScratch: Uint8Array | null = null;
   private atlas: GlyphAtlas | null = null;
   private needs: VisionNeeds = { occupancy: true };
   private learning = 0;
@@ -119,6 +123,9 @@ export class VisionPipeline {
       this.inkDetector = new InkDetector(size.w, size.h);
       this.solid = createMask(size.w, size.h);
       this.field = new Float32Array(size.w * size.h);
+      this.blurScratch = new Float32Array(size.w * size.h);
+      this.labelScratch = createLabelScratch(size.w, size.h);
+      this.contourScratch = new Uint8Array((size.w + 1) * (size.h + 1));
       this.state = null;
     }
     // Force the gather table to be rebuilt against the new corners.
@@ -187,6 +194,27 @@ export class VisionPipeline {
     if (this.learning > 0) {
       occupancy.learn(frame);
       this.learning--;
+      // Nothing is reported while the reference is still being averaged. A
+      // half-learned background yields blobs that are pure artefact, and a
+      // game that acted on them would score the player for clearing the table.
+      solid.data.fill(0);
+      occupancy.mask.data.fill(0);
+      this.state = {
+        frame,
+        board: this.board,
+        occupancy: occupancy.mask,
+        solid,
+        ink: inkDetector.mask,
+        field,
+        blobs: [],
+        tokens: [],
+        tiles: [],
+        contours: [],
+        coveredPixels: 0,
+        timings: t,
+        ready: false,
+      };
+      return this.state;
     }
 
     mark = performance.now();
@@ -209,7 +237,7 @@ export class VisionPipeline {
       solid.data.set(occupancy.mask.data);
     }
 
-    if (this.needs.field) blurToField(solid, field, 2);
+    if (this.needs.field) blurToField(solid, field, 2, this.blurScratch ?? undefined);
 
     mark = performance.now();
     let blobs: Blob[] = [];
@@ -219,6 +247,7 @@ export class VisionPipeline {
         rgba: frame.rgba,
         minArea: Math.round(this.board.w * this.board.h * 0.0008),
         limit: 32,
+        scratch: this.labelScratch ?? undefined,
       });
       blobs = result.blobs;
       if (this.needs.tokens) {
@@ -243,7 +272,7 @@ export class VisionPipeline {
 
     mark = performance.now();
     const contours = this.needs.contours
-      ? traceContours(solid, 10).map((c) => simplify(c, 1.2))
+      ? traceContours(solid, 10, this.contourScratch ?? undefined).map((c) => simplify(c, 1.2))
       : [];
     t.contours = performance.now() - mark;
 
@@ -262,7 +291,7 @@ export class VisionPipeline {
       contours,
       coveredPixels: covered,
       timings: t,
-      ready: occupancy.calibrated && this.learning === 0,
+      ready: occupancy.calibrated,
     };
     return this.state;
   }

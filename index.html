@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>frosmo — table games through the mirror</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no"
+    />
+    <meta name="description" content="Tabletop games played through a mirror clipped over a tablet's camera." />
+    <meta name="theme-color" content="#0d1220" />
+    <meta name="color-scheme" content="dark" />
+
+    <!-- Home-screen install on iPadOS. Camera access works in this mode from
+         iOS 14.3 onwards; before that getUserMedia failed silently here. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="frosmo" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <link rel="icon" href="./icons/icon-192.png" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+  </head>
+  <body>
+    <div id="app"></div>
+    <noscript>frosmo needs JavaScript and a camera.</noscript>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

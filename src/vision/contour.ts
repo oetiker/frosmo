@@ -15,17 +15,22 @@ export type Contour = number[]; // flat [x0, y0, x1, y1, ...] in board pixels
 /**
  * Marching-squares boundary tracing.
  *
+ * `scratch` is a reusable visited buffer of at least (w+1)*(h+1) bytes; pass
+ * one from the per-frame path to avoid allocating it every frame.
+ *
  * Walks each region's boundary once, keeping the interior on the right, and
  * marks visited boundary cells so a region with holes yields one loop per
  * boundary rather than the same loop repeatedly.
  */
-export function traceContours(mask: Mask, minLength = 12): Contour[] {
+export function traceContours(mask: Mask, minLength = 12, scratch?: Uint8Array): Contour[] {
   const { w, h, data } = mask;
   const at = (x: number, y: number) => (x < 0 || y < 0 || x >= w || y >= h ? 0 : data[y * w + x]);
 
   // One cell per lattice corner: the square with corners (x-1,y-1)..(x,y).
   const cw = w + 1;
-  const visited = new Uint8Array(cw * (h + 1));
+  const cells = cw * (h + 1);
+  const visited = scratch && scratch.length >= cells ? scratch : new Uint8Array(cells);
+  visited.fill(0, 0, cells);
   const out: Contour[] = [];
 
   for (let sy = 0; sy <= h; sy++) {

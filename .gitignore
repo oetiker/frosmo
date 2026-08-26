@@ -2,3 +2,6 @@ node_modules/
 dist/
 .DS_Store
 *.local
+
+# Browser smoke-test output: screenshots and a 55MB synthetic camera clip
+.smoke/

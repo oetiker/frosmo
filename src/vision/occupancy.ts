@@ -21,8 +21,10 @@ export interface OccupancyOptions {
   threshold?: number;
   /** Rounds of open() applied to the raw difference. */
   denoise?: number;
-  /** Per-frame weight for drift correction of background pixels. 0 disables it. */
+  /** Weight for drift correction of background pixels, per correction pass. 0 disables it. */
   drift?: number;
+  /** Apply drift correction every N frames. Lighting moves over minutes, not frames. */
+  driftEvery?: number;
   /** Reject darker-but-same-colour pixels as shadow. */
   rejectShadows?: boolean;
 }
@@ -33,6 +35,7 @@ export class OccupancyDetector {
   private readonly bgRgb: Float32Array;
   private readonly scratch: Uint8Array;
   private samples = 0;
+  private frames = 0;
   private opts: Required<OccupancyOptions>;
 
   constructor(
@@ -47,7 +50,8 @@ export class OccupancyDetector {
     this.opts = {
       threshold: opts.threshold ?? 26,
       denoise: opts.denoise ?? 1,
-      drift: opts.drift ?? 0.01,
+      drift: opts.drift ?? 0.12,
+      driftEvery: opts.driftEvery ?? 12,
       rejectShadows: opts.rejectShadows ?? true,
     };
   }
@@ -92,7 +96,13 @@ export class OccupancyDetector {
   detect(frame: RectifiedFrame): number {
     if (!this.calibrated) return 0;
 
-    const { threshold, denoise, drift, rejectShadows } = this.opts;
+    const { threshold, denoise, drift, driftEvery, rejectShadows } = this.opts;
+    // Room lights and the tablet's own auto-exposure move over minutes. Folding
+    // that in on every frame costs four float operations on nearly every pixel
+    // to track something that has not measurably changed since the last frame;
+    // once every driftEvery frames tracks it just as well for a twelfth of the
+    // work.
+    const applyDrift = drift > 0 && ++this.frames % driftEvery === 0;
     const { gray, rgba } = frame;
     const m = this.mask.data;
     let count = 0;
@@ -118,7 +128,7 @@ export class OccupancyDetector {
       m[i] = fg;
       count += fg;
 
-      if (!fg && drift > 0) {
+      if (!fg && applyDrift) {
         this.bgGray[i] += (cur - this.bgGray[i]) * drift;
         const o = i * 3;
         const j = i * 4;

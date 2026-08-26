@@ -139,9 +139,16 @@ export function close(m: Mask, scratch: Uint8Array, times = 1): void {
  * gradient is either zero or a cliff. Blurring first turns the obstacle into a
  * field whose gradient points out of it, which is exactly the collision normal.
  */
-export function blurToField(m: Mask, out: Float32Array, radius = 2): void {
+export function blurToField(
+  m: Mask,
+  out: Float32Array,
+  radius = 2,
+  scratch?: Float32Array,
+): void {
   const { w, h, data } = m;
-  const tmp = new Float32Array(w * h);
+  // Callers in the per-frame path pass their own scratch; allocating one here
+  // every frame would hand the collector 200KB thirty times a second.
+  const tmp = scratch && scratch.length >= w * h ? scratch : new Float32Array(w * h);
   const norm = 1 / (radius * 2 + 1);
 
   for (let y = 0; y < h; y++) {

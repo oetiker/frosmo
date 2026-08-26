@@ -106,7 +106,7 @@ describe("chromaDistance", () => {
 describe("InkDetector", () => {
   it("finds a pen stroke on paper", () => {
     const d = new InkDetector(W, H, { radius: 6, bridge: 0 });
-    const page = frameOf((x, y) => (y >= 22 && y < 25 ? [40, 40, 45] : [232, 230, 226]));
+    const page = frameOf((_x, y) => (y >= 22 && y < 25 ? [40, 40, 45] : [232, 230, 226]));
     const n = d.detect(page.gray);
     expect(n).toBeGreaterThan(100);
     expect(d.mask.data[23 * W + 30]).toBe(1);

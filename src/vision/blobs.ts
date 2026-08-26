@@ -29,6 +29,16 @@ export interface Blob {
   elongation: number;
 }
 
+/** Reusable working buffers, so the per-frame path allocates nothing. */
+export interface LabelScratch {
+  labels: Int32Array;
+  stack: Int32Array;
+}
+
+export function createLabelScratch(w: number, h: number): LabelScratch {
+  return { labels: new Int32Array(w * h), stack: new Int32Array(w * h) };
+}
+
 export interface LabelResult {
   blobs: Blob[];
   /** Per-pixel blob id, 0 = background. Same dimensions as the input mask. */
@@ -44,14 +54,18 @@ export interface LabelOptions {
   rgba?: Uint8ClampedArray;
   /** Cap on returned blobs, largest first. */
   limit?: number;
+  /** Working buffers to reuse; one is allocated per call when omitted. */
+  scratch?: LabelScratch;
 }
 
 export function labelBlobs(mask: Mask, opts: LabelOptions = {}): LabelResult {
   const { w, h, data } = mask;
   const minArea = opts.minArea ?? 24;
   const maxArea = (opts.maxAreaFraction ?? 0.6) * w * h;
-  const labels = new Int32Array(w * h);
-  const stack = new Int32Array(w * h);
+  const reuse = opts.scratch && opts.scratch.labels.length >= w * h;
+  const labels = reuse ? opts.scratch!.labels : new Int32Array(w * h);
+  const stack = reuse ? opts.scratch!.stack : new Int32Array(w * h);
+  if (reuse) labels.fill(0);
   const blobs: Blob[] = [];
   let next = 1;
 

@@ -20,6 +20,15 @@ export const DEFAULT_DIGITS = "0123456789";
 /** Side length of a normalised glyph, in pixels. 24 is enough to separate B from 8. */
 export const GLYPH_SIZE = 24;
 
+/**
+ * The letterform the atlas is drawn in.
+ *
+ * Exported because the printable tile sheet must use the identical stack: that
+ * is what makes tiles printed from this app match the templates it matches
+ * against.
+ */
+export const GLYPH_FONT_STACK = '"Helvetica Neue", Helvetica, Arial, sans-serif';
+
 export interface GlyphAtlas {
   readonly chars: string[];
   /** One GLYPH_SIZE * GLYPH_SIZE binary bitmap per character. */
@@ -45,7 +54,7 @@ export interface GlyphMatch {
  */
 export function buildAtlas(
   chars: string,
-  font = `700 ${GLYPH_SIZE * 4}px "Helvetica Neue", Helvetica, Arial, sans-serif`,
+  font = `700 ${GLYPH_SIZE * 4}px ${GLYPH_FONT_STACK}`,
 ): GlyphAtlas {
   const scale = 4;
   const size = GLYPH_SIZE * scale;
