@@ -142,6 +142,19 @@ export class VisionPipeline {
     this.learning = frames;
   }
 
+  /**
+   * Throw the reference away without taking a new one.
+   *
+   * For when the frame itself has changed under us — a different camera, a
+   * recalibration — and the next screen that wants the board will learn it
+   * afresh. Keeping the old reference would be worse than having none: it
+   * would produce confident, wrong detections.
+   */
+  forgetBackground(): void {
+    this.occupancy?.forget();
+    this.learning = 0;
+  }
+
   get learningBackground(): boolean {
     return this.learning > 0;
   }

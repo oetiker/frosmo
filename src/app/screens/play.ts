@@ -98,6 +98,26 @@ export function playScreen(gameId?: string): Screen {
         overlay.className = "play-overlay show";
         overlay.textContent = "Clear the play area…";
       };
+
+      /**
+       * Stop rather than play on a board calibrated with a different camera.
+       *
+       * The corners are only meaningful in the frame they were marked in, so
+       * this would not be a slightly-off board — it would be a game reacting to
+       * the wrong part of the world, which reads as the app being broken.
+       */
+      const showCameraMismatch = () => {
+        overlay.className = "play-overlay show";
+        overlay.textContent = "";
+        overlay.append(
+          h("div", {}, "This board was set up with a different camera."),
+          h(
+            "button",
+            { class: "primary", onclick: () => app.go("calibrate") },
+            "Set the board up again",
+          ),
+        );
+      };
       const hideOverlay = () => {
         overlay.className = "play-overlay";
       };
@@ -113,6 +133,10 @@ export function playScreen(gameId?: string): Screen {
       void app
         .useCamera()
         .then(() => {
+          if (!app.cameraMatchesCalibration()) {
+            showCameraMismatch();
+            return;
+          }
           started = performance.now();
           lastTime = started;
 

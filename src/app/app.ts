@@ -12,6 +12,13 @@ import { Audio } from "../util/audio.js";
 import { clear } from "../util/dom.js";
 import { loadCalibration, saveCalibration, type Calibration } from "../vision/calibration.js";
 import { Camera } from "../vision/camera.js";
+import {
+  listCameras,
+  loadCameraPreference,
+  resolveCamera,
+  saveCameraPreference,
+  type CameraChoice,
+} from "../vision/cameras.js";
 import { VisionPipeline } from "../vision/pipeline.js";
 
 export interface Screen {
@@ -26,6 +33,10 @@ export class App {
   readonly pipeline = new VisionPipeline(this.camera);
   readonly audio = new Audio();
   calibration: Calibration | null = loadCalibration();
+  /** The camera the player picked, if any; null means "let the browser choose". */
+  preferredCamera: CameraChoice | null = loadCameraPreference();
+  /** Video inputs seen the last time we could enumerate them. */
+  cameras: CameraChoice[] = [];
   /** Set when a screen wants the camera; released when nothing does. */
   private cameraUsers = 0;
   private current: Screen | null = null;
@@ -36,9 +47,6 @@ export class App {
   constructor(private readonly root: HTMLElement) {
     if (this.calibration) this.pipeline.setCalibration(this.calibration);
     this.camera.onTrackLost(() => this.handleCameraLost());
-    // iPadOS suspends the capture when the app goes to the background and
-    // sometimes never resumes it; re-acquire on return rather than showing a
-    // frozen frame.
     // Fragment navigation — the browser's back button, or a deep link pasted
     // into an already-open tab — changes the hash without reloading. Without
     // this the app silently stays where it is.
@@ -46,6 +54,9 @@ export class App {
       const { name, arg } = this.parseHash();
       if (name && (name !== this.currentName || arg !== this.currentArg)) this.go(name, arg);
     });
+    // iPadOS suspends the capture when the app goes to the background and
+    // sometimes never resumes it; re-acquire on return rather than showing a
+    // frozen frame.
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible" && this.cameraUsers > 0 && !this.camera.running) {
         void this.acquireCamera();
@@ -103,7 +114,56 @@ export class App {
   }
 
   private async acquireCamera(): Promise<void> {
-    await this.camera.start({ facingMode: "user", width: 1280, height: 720 });
+    // A remembered choice is only a request: the device may have been
+    // unplugged, or its id may have rotated. resolveCamera decides whether the
+    // preference is still meaningful, and we fall back to the front camera —
+    // the one a reflector sits over — when it is not.
+    const resolved = resolveCamera(this.cameras, this.preferredCamera);
+    await this.camera.start(
+      resolved
+        ? { deviceId: resolved.deviceId, width: 1280, height: 720 }
+        : { facingMode: "user", width: 1280, height: 720 },
+    );
+    // Labels are blank until permission has been granted, so the list is only
+    // worth reading once a stream is up. This is also why the picker lives on
+    // a screen that has already started the camera.
+    this.cameras = await listCameras();
+  }
+
+  /**
+   * Switch to a different camera, and remember it.
+   *
+   * The stream is torn down and rebuilt rather than using applyConstraints:
+   * changing the source device on a live track is not reliable across
+   * browsers, and this path is already exercised on every backgrounding.
+   */
+  async selectCamera(choice: CameraChoice | null): Promise<void> {
+    this.preferredCamera = choice;
+    saveCameraPreference(choice);
+    if (this.cameraUsers === 0) return;
+    this.camera.stop();
+    await this.acquireCamera();
+  }
+
+  /** Refresh the known device list; safe to call any time a stream is running. */
+  async refreshCameras(): Promise<CameraChoice[]> {
+    this.cameras = await listCameras();
+    return this.cameras;
+  }
+
+  /**
+   * Whether the running camera is the one the board was calibrated with.
+   *
+   * A calibration is four corners in *one camera's* frame. Point a different
+   * camera at the table and those corners describe nothing, so this is worth
+   * saying out loud rather than letting the games quietly mis-see the board.
+   */
+  cameraMatchesCalibration(): boolean {
+    const calibratedTo = this.calibration?.cameraId;
+    if (!calibratedTo) return true;
+    const active = this.camera.activeDeviceId;
+    if (!active) return true;
+    return active === calibratedTo;
   }
 
   private handleCameraLost(): void {

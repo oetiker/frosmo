@@ -40,6 +40,7 @@ to the image is already inside that transform:
 |---|---|
 | Mirror geometry, fold angle | into the homography |
 | How far the tablet leans back | into the homography |
+| Which camera, of several | chosen once, remembered |
 | Which edge the camera is on | into the orientation |
 | Whether light bounces once (handedness) | into the orientation's mirror bit |
 | How big the play area is | nowhere — board space is normalised |
@@ -48,7 +49,21 @@ Nothing downstream knows a mirror exists. An Osmo base with the 2021 reflector,
 a hand-cut mirror on a book stand, and a phone propped against a mug all
 calibrate identically, and a rig nobody has tried needs no code.
 
-Two details make this hold up in practice:
+Three details make this hold up in practice:
+
+- **Which camera is part of the rig, so it is part of the setup.** A reflector
+  over the front camera, a tablet face-down over the table, a laptop with a
+  mirror on a book and an external webcam are all rigs, and no default serves
+  them all. The choice is the player's, made on the calibration screen and
+  remembered. Device labels are blank until camera permission has been granted,
+  so the picker is populated only once a stream is running — which is why it
+  lives on a screen that has already started one.
+- **A calibration belongs to a camera.** The corners are meaningful only in the
+  frame they were marked in, so the calibration records the device that made it
+  and a game refuses to start on a board calibrated with a different one. The
+  alternative is worse than an error: a game reacting confidently to the wrong
+  part of the world, which reads as the app being broken rather than
+  misconfigured.
 
 - **Corners are stored normalised to the frame, not in pixels.** iPadOS may hand
   back a different capture resolution after the app is backgrounded, and a

@@ -100,8 +100,15 @@ async function main() {
     permissions: ["camera"],
     deviceScaleFactor: 2,
   });
+  // Seed the calibration the synthetic scene was drawn to match — but only
+  // when there is none. An init script runs on *every* navigation, so setting
+  // it unconditionally would silently undo anything the app itself saves, and
+  // any later check that depends on stored state would be testing this line
+  // rather than the app.
   await context.addInitScript((cal) => {
-    localStorage.setItem("frosmo:calibration", JSON.stringify(cal));
+    if (!localStorage.getItem("frosmo:calibration")) {
+      localStorage.setItem("frosmo:calibration", JSON.stringify(cal));
+    }
   }, CALIBRATION);
 
   const page = await context.newPage();
@@ -234,6 +241,11 @@ async function main() {
     check("calibration preview shows the rectified table", previewLive > 120, `luma ${Math.round(previewLive)}`);
     await page.screenshot({ path: join(OUT, "4-calibrate.png") });
 
+    // The camera picker only has anything to show once a stream is running,
+    // because device labels stay blank until permission is granted.
+    const picker = await page.locator(".cal-camera").innerText();
+    check("the camera picker is populated once the stream is up", picker.trim().length > 0, picker.trim());
+
     // Dragging a corner must store a position relative to the camera *frame*,
     // not to the element the frame is letterboxed inside. The two agree only
     // when the stage happens to match the camera's aspect ratio, so this drags
@@ -287,6 +299,38 @@ async function main() {
       "a dragged corner is stored in frame coordinates",
       off < 0.02,
       `stored (${corner.x.toFixed(3)}, ${corner.y.toFixed(3)}), expected (${expected.x.toFixed(3)}, ${expected.y.toFixed(3)})`,
+    );
+    check(
+      "the calibration records which camera made it",
+      typeof stored.cameraId === "string" && stored.cameraId.length > 0,
+      stored.cameraId ? `cameraId ${String(stored.cameraId).slice(0, 12)}…` : "not recorded",
+    );
+
+    // --- a board calibrated with another camera is refused ----------------
+    // Corners are only meaningful in the frame they were marked in, so a game
+    // must stop rather than react to the wrong part of the world.
+    await page.evaluate(() => {
+      const cal = JSON.parse(localStorage.getItem("frosmo:calibration"));
+      cal.cameraId = "a-camera-that-is-not-attached";
+      localStorage.setItem("frosmo:calibration", JSON.stringify(cal));
+    });
+    await page.goto(`http://localhost:${PORT}${BASE}#play/silhouette`);
+    // A reload, not just a hash change: the running app holds the calibration
+    // in memory, so editing storage under it proves nothing without one.
+    await page.reload();
+    // Wait for the refusal specifically. The "clear the play area" overlay
+    // appears synchronously on mount, while the camera check can only run once
+    // the stream is up — reading the overlay before then just races it.
+    await page.waitForSelector(".play-overlay button", { timeout: 15000 }).catch(() => undefined);
+    const refusal = await page.locator(".play-overlay").innerText();
+    check(
+      "a game refuses a board calibrated with a different camera",
+      /different camera/i.test(refusal),
+      refusal.replace(/\n/g, " · "),
+    );
+    check(
+      "and offers the way out",
+      (await page.locator(".play-overlay button").count()) === 1,
     );
 
     // --- deployable as a static site under a sub-path --------------------
