@@ -12,7 +12,7 @@
  */
 
 import { DEFAULT_DIGITS, DEFAULT_LETTERS, GLYPH_FONT_STACK } from "../../vision/glyph.js";
-import { h } from "../../util/dom.js";
+import { h, s } from "../../util/dom.js";
 import type { App, Screen } from "../app.js";
 
 const TOKEN_COLORS = [
@@ -64,12 +64,15 @@ export function printScreen(): Screen {
               { class: "sheet" },
               h("h2", {}, "Colour tokens"),
               h(
+                "p",
+                { class: "no-print note" },
+                "Tokens are sorted by hue, so they have to come off a colour printer — a greyscale copy of the sheet gives four discs the camera cannot tell apart.",
+              ),
+              h(
                 "div",
                 { class: "tokens" },
                 ...TOKEN_COLORS.flatMap(([name, colour]) =>
-                  Array.from({ length: 6 }, () =>
-                    h("div", { class: "token", style: `background:${colour}`, title: name }),
-                  ),
+                  Array.from({ length: 6 }, () => token(name, colour)),
                 ),
               ),
             ),
@@ -82,4 +85,30 @@ export function printScreen(): Screen {
 
 function tile(ch: string): HTMLElement {
   return h("div", { class: "tile", style: `font-family:${GLYPH_FONT_STACK}` }, ch);
+}
+
+/**
+ * A token is drawn rather than styled.
+ *
+ * A `background` here is what the first attempt used, and it prints blank:
+ * browsers treat background colours as decoration and leave them out of a
+ * print job unless the user finds the "background graphics" checkbox. An SVG
+ * fill is content, so it comes out of every printer without the user having to
+ * know that.
+ */
+function token(name: string, colour: string): SVGSVGElement {
+  return s(
+    "svg",
+    { class: "token", viewBox: "0 0 100 100", role: "img", "aria-label": `${name} token` },
+    s("title", {}, `${name} token`),
+    s("circle", {
+      cx: 50,
+      cy: 50,
+      r: 48.9,
+      fill: colour,
+      stroke: "#111",
+      "stroke-opacity": 0.53,
+      "stroke-width": 2.2,
+    }),
+  );
 }

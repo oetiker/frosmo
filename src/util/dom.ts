@@ -8,17 +8,36 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   attrs: Attrs = {},
   ...children: Child[]
 ): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag);
+  return build(document.createElement(tag), attrs, children);
+}
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/**
+ * The same, for SVG.
+ *
+ * Worth the extra namespace dance where colour has to survive a print job:
+ * browsers drop background colours from print output unless the user ticks
+ * "background graphics", but the fill of a drawn shape is content and always
+ * comes out.
+ */
+export function s<K extends keyof SVGElementTagNameMap>(
+  tag: K,
+  attrs: Attrs = {},
+  ...children: Child[]
+): SVGElementTagNameMap[K] {
+  return build(document.createElementNS(SVG_NS, tag), attrs, children);
+}
+
+function build<E extends Element>(el: E, attrs: Attrs, children: Child[]): E {
   for (const [key, value] of Object.entries(attrs)) {
     if (value === undefined || value === false) continue;
     if (key.startsWith("on") && typeof value === "function") {
       el.addEventListener(key.slice(2).toLowerCase(), value as EventListener);
-    } else if (key === "class") {
-      el.className = String(value);
     } else if (key === "html") {
       el.innerHTML = String(value);
     } else {
+      // Not el.className: on an SVG element that property is read-only.
       el.setAttribute(key, String(value));
     }
   }
