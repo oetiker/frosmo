@@ -119,3 +119,7 @@ src/games/      one file per game, plus the contract they implement
 src/app/        shell and screens: home, calibrate, play, lab, print, about
 tools/          icon generation, service worker generation, bench, smoke test
 ```
+
+## Licence
+
+[MIT](LICENSE).
