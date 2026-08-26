@@ -43,16 +43,20 @@ Four detectors, each computed only when a game asks for it:
 
 ## Getting it onto an iPad
 
-`getUserMedia` needs a secure context, and iPadOS gives no localhost exemption
-to another machine on the LAN, so `npm run dev --host` over `http://192.168.…`
-**will not** get you a camera. Two things that do work:
+**https://oetiker.github.io/frosmo/** — open it on the iPad and use **Share ›
+Add to Home Screen**. After that it runs fullscreen, and offline: the service
+worker precaches the whole app on first visit, so the tablet on the kitchen
+table needs no network and no server at all.
 
-1. **Deploy the build.** `npm run build` produces a fully static `dist/` — no
-   server-side anything. Serve it over HTTPS from any static host and open it on
-   the iPad. Add to Home Screen for fullscreen and offline play.
-2. **Tunnel your dev server.** Point `cloudflared tunnel --url http://localhost:5173`
-   (or ngrok) at `npm run dev` and open the HTTPS URL it prints. Live reload,
-   real camera.
+Every push to `main` republishes it. `npm run build` produces a fully static
+`dist/` with relative asset paths, so it serves correctly from a sub-path like
+`/frosmo/` or from any other static host you point at it.
+
+For development, note that `getUserMedia` needs a secure context, and iPadOS
+gives no localhost exemption to another machine on the LAN — `npm run dev --host`
+over `http://192.168.…` **will not** get you a camera. Tunnel instead:
+`cloudflared tunnel --url http://localhost:5173` (or ngrok) alongside
+`npm run dev`, and open the HTTPS URL it prints. Live reload, real camera.
 
 Camera access works in home-screen web apps from iOS 14.3 onward. On older
 versions, run it in Safari rather than installed.
@@ -106,7 +110,10 @@ coloured pieces and a drawn line on it — feeds it to Chromium as a fake camera
 and drives the actual app: calibration, the vision lab, each game. It checks
 the pipeline finds the pieces, reads their colours, rectifies the trapezoid, and
 stores dragged corners in frame coordinates, then leaves screenshots in
-`.smoke/`. It has caught three bugs no unit test would have.
+`.smoke/`. It has caught three bugs no unit test would have. It serves the build from a
+sub-path, as GitHub Pages does, and checks that the manifest, the icons and the
+service worker all resolve there — an absolute base would pass at the root and
+then 404 on the real deployment.
 
 Set `CHROMIUM_PATH` if Playwright's bundled browser is not the one installed.
 

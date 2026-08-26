@@ -1,5 +1,5 @@
 /**
- * End-to-end smoke test against a synthetic mirror.
+ * End-to-end smoke test against a synthetic mirror, served the way it deploys.
  *
  * Unit tests cover the maths; this covers the parts that only exist in a
  * browser — getUserMedia, the video readback, canvas rendering, the screens —
@@ -21,6 +21,14 @@ const DIST = join(ROOT, "dist");
 const OUT = process.env.SMOKE_OUT ?? join(ROOT, ".smoke");
 const CLIP = join(OUT, "fake-camera.y4m");
 const PORT = 4319;
+/**
+ * Served from a sub-path on purpose.
+ *
+ * GitHub Pages project sites live at /<repo>/, so every asset, the manifest,
+ * the icons and the service worker have to resolve relatively. Serving at the
+ * root would pass with an absolute base and then 404 on the real deployment.
+ */
+const BASE = "/frosmo/";
 
 const MIME = {
   ".html": "text/html",
@@ -34,7 +42,11 @@ const MIME = {
 function serve() {
   const server = createServer((req, res) => {
     const url = new URL(req.url, "http://localhost");
-    let file = join(DIST, decodeURIComponent(url.pathname));
+    if (!url.pathname.startsWith(BASE)) {
+      res.writeHead(404).end("not found");
+      return;
+    }
+    let file = join(DIST, decodeURIComponent(url.pathname.slice(BASE.length)));
     if (!existsSync(file) || statSync(file).isDirectory()) file = join(DIST, "index.html");
     res.writeHead(200, { "content-type": MIME[extname(file)] ?? "application/octet-stream" });
     createReadStream(file).pipe(res);
@@ -100,7 +112,7 @@ async function main() {
   });
 
   try {
-    await page.goto(`http://localhost:${PORT}/#home`);
+    await page.goto(`http://localhost:${PORT}${BASE}#home`);
     await page.waitForSelector(".card");
     check("menu lists every game", (await page.locator(".card").count()) === 4);
     await page.screenshot({ path: join(OUT, "1-home.png") });
@@ -186,7 +198,7 @@ async function main() {
     ];
 
     for (const [name, what] of playable) {
-      await page.goto(`http://localhost:${PORT}/#home`);
+      await page.goto(`http://localhost:${PORT}${BASE}#home`);
       await page.getByRole("button", { name: new RegExp(name) }).click();
       await page.waitForSelector(".play-canvas");
       // Long enough for Bounce to spawn its first ball on its own.
@@ -211,7 +223,7 @@ async function main() {
     }
 
     // --- calibration screen loads its live preview -----------------------
-    await page.goto(`http://localhost:${PORT}/#calibrate`);
+    await page.goto(`http://localhost:${PORT}${BASE}#calibrate`);
     await page.waitForSelector(".cal-overlay");
     await page.waitForTimeout(1500);
     const previewLive = await page.evaluate(() => {
@@ -275,6 +287,51 @@ async function main() {
       "a dragged corner is stored in frame coordinates",
       off < 0.02,
       `stored (${corner.x.toFixed(3)}, ${corner.y.toFixed(3)}), expected (${expected.x.toFixed(3)}, ${expected.y.toFixed(3)})`,
+    );
+
+    // --- deployable as a static site under a sub-path --------------------
+    const registration = await page.evaluate(async () => {
+      const reg = await navigator.serviceWorker.getRegistration();
+      return reg ? { scope: reg.scope, active: Boolean(reg.active || reg.installing || reg.waiting) } : null;
+    });
+    check(
+      "the service worker registers under the sub-path",
+      Boolean(registration?.active) && registration.scope.endsWith(BASE),
+      registration ? registration.scope : "no registration",
+    );
+
+    const assets = await page.evaluate(async (base) => {
+      const manifestHref = document.querySelector('link[rel=manifest]').href;
+      const manifest = await fetch(manifestHref).then((r) => (r.ok ? r.json() : null));
+      if (!manifest) return { manifest: false };
+      const icons = await Promise.all(
+        manifest.icons.map(async (icon) => {
+          const url = new URL(icon.src, manifestHref);
+          const res = await fetch(url);
+          return { url: url.pathname, ok: res.ok, type: res.headers.get("content-type") };
+        }),
+      );
+      const apple = document.querySelector('link[rel="apple-touch-icon"]').href;
+      const appleOk = (await fetch(apple)).ok;
+      return {
+        manifest: true,
+        underBase: new URL(manifestHref).pathname.startsWith(base),
+        start: new URL(manifest.start_url, manifestHref).pathname,
+        icons,
+        appleOk,
+      };
+    }, BASE);
+
+    check("the manifest resolves relative to the deployment", assets.manifest && assets.underBase);
+    check(
+      "the install icons resolve",
+      assets.icons?.every((i) => i.ok) && assets.appleOk,
+      assets.icons?.map((i) => `${i.url} ${i.ok ? "ok" : "MISSING"}`).join(", "),
+    );
+    check(
+      "start_url points at the deployment, not the domain root",
+      assets.start === BASE,
+      assets.start,
     );
 
     check("no console errors anywhere", errors.length === 0, errors.slice(0, 3).join(" | "));
