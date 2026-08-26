@@ -1,0 +1,21 @@
+{
+  "name": "frosmo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A PWA for tabletop games played with an Osmo-style mirror rig on an iPad",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build && node tools/gen-sw.mjs",
+    "preview": "vite preview --host",
+    "icons": "node tools/make-icons.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10",
+    "vitest": "^2.1.4"
+  }
+}
