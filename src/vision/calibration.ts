@@ -47,6 +47,18 @@ export interface Calibration {
   aspect: number;
   /** Board buffer width in pixels; height follows from the aspect. */
   resolution: number;
+  /**
+   * The camera this calibration was made with.
+   *
+   * Four corners are only meaningful in the frame they were marked in. Point a
+   * different camera at the table — a back camera, an external webcam — and
+   * they describe nothing. Recording the device lets the app say so instead of
+   * letting the games mis-see the board. Optional: calibrations made before
+   * the camera picker existed simply do not have it, and are trusted.
+   */
+  cameraId?: string;
+  /** Human-readable name of that camera, for when the id has rotated. */
+  cameraLabel?: string;
   createdAt: number;
 }
 

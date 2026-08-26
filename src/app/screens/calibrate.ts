@@ -23,6 +23,7 @@ import {
   type Orientation,
 } from "../../vision/calibration.js";
 import { describeCameraError, onVideoFrame } from "../../vision/camera.js";
+import { describeCamera, watchCameras, type CameraChoice } from "../../vision/cameras.js";
 import type { Quad } from "../../vision/homography.js";
 import { createRectifiedFrame, buildSampleTable, rectify } from "../../vision/rectify.js";
 
@@ -34,6 +35,7 @@ export function calibrateScreen() {
   let dragging = -1;
   let learning = 0;
   let owner: import("../app.js").App | null = null;
+  let stopWatchingCameras: (() => void) | null = null;
 
   return {
     mount(app: import("../app.js").App, root: HTMLElement) {
@@ -46,6 +48,7 @@ export function calibrateScreen() {
       const overlay = h("canvas", { class: "cal-overlay" });
       const preview = h("canvas", { class: "cal-preview", width: "256", height: "192" });
       const status = h("div", { class: "cal-status" }, "Starting the camera…");
+      const cameraPicker = h("div", { class: "cal-camera" }, h("span", { class: "cal-caption" }, "…"));
 
       const orientationLabel = h("span", {}, orientationName(draft.orientation));
 
@@ -73,10 +76,12 @@ export function calibrateScreen() {
                 "ol",
                 { class: "steps" },
                 h("li", {}, "Clip the mirror over the camera so it looks at the table."),
+                h("li", {}, "Pick the camera that faces the table, if there is more than one."),
                 h("li", {}, "Drag the four handles onto the corners of the play area."),
                 h("li", {}, "Check the preview looks like your table, right way round."),
                 h("li", {}, "Clear the table, then learn the empty board."),
               ),
+              h("div", { class: "row" }, h("label", {}, "Camera"), cameraPicker),
               h("div", { class: "cal-preview-wrap" }, preview, h("span", { class: "cal-caption" }, "What the games will see")),
               h(
                 "div",
@@ -172,7 +177,12 @@ export function calibrateScreen() {
       };
 
       const save = (a: import("../app.js").App) => {
-        a.setCalibration({ ...draft, createdAt: Date.now() });
+        a.setCalibration({
+          ...draft,
+          cameraId: a.camera.activeDeviceId ?? undefined,
+          cameraLabel: a.camera.activeLabel ?? undefined,
+          createdAt: Date.now(),
+        });
         learning = 100;
         status.textContent = "Clear the table — learning the empty board…";
         a.pipeline.relearnBackground(14);
@@ -238,9 +248,67 @@ export function calibrateScreen() {
       overlay.addEventListener("pointercancel", endDrag);
 
       // --- live loop -----------------------------------------------------
+      /**
+       * Rebuild the picker from whatever is attached.
+       *
+       * Only called once a stream is running: before permission is granted the
+       * devices come back with blank labels, and a list of "Camera 1, Camera 2"
+       * is no help at all when the whole question is which one faces the
+       * mirror.
+       */
+      const renderCameraPicker = () => {
+        const cameras = app.cameras;
+        const active = app.camera.activeDeviceId;
+        cameraPicker.textContent = "";
+
+        if (cameras.length === 0) {
+          cameraPicker.append(h("span", { class: "cal-caption" }, "No camera list available"));
+          return;
+        }
+        if (cameras.length === 1) {
+          cameraPicker.append(
+            h("span", { class: "cal-caption" }, describeCamera(cameras[0], 0)),
+          );
+          return;
+        }
+
+        const chosen = cameras.find((c) => c.deviceId === active)?.deviceId ?? cameras[0].deviceId;
+        cameraPicker.append(
+          select(
+            cameras.map((c, i) => [c.deviceId, describeCamera(c, i)] as [string, string]),
+            chosen,
+            (deviceId) => {
+              const choice = cameras.find((c) => c.deviceId === deviceId) ?? null;
+              void switchCamera(choice);
+            },
+          ),
+        );
+      };
+
+      const switchCamera = async (choice: CameraChoice | null) => {
+        status.textContent = "Switching camera…";
+        try {
+          await app.selectCamera(choice);
+          // A different camera means a different frame: the gather table and
+          // anything learned about the board belong to the old one.
+          table = null;
+          app.pipeline.forgetBackground();
+          status.textContent = "Camera changed — check the corners still line up.";
+        } catch (e) {
+          status.textContent = describeCameraError(e);
+          status.classList.add("error");
+        }
+        renderCameraPicker();
+      };
+
+      stopWatchingCameras = watchCameras(() => {
+        void app.refreshCameras().then(renderCameraPicker);
+      });
+
       void app
         .useCamera()
         .then(() => {
+          renderCameraPicker();
           status.textContent = "Drag the handles onto the corners of the play area.";
           stopFrames = onVideoFrame(video, () => {
             const size = { w: overlay.clientWidth, h: overlay.clientHeight };
@@ -289,6 +357,8 @@ export function calibrateScreen() {
     unmount() {
       stopFrames?.();
       stopFrames = null;
+      stopWatchingCameras?.();
+      stopWatchingCameras = null;
       owner?.releaseCamera();
       owner = null;
     },

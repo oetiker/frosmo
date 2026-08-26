@@ -105,6 +105,23 @@ export class Camera {
     return { w: this.video.videoWidth, h: this.video.videoHeight };
   }
 
+  /**
+   * The device the running track actually came from.
+   *
+   * Asked of the track rather than remembered from the request, because a
+   * constraint is a preference: ask for a device that has been unplugged and
+   * the browser hands back a different one without complaint. Only the track
+   * knows what is really on.
+   */
+  get activeDeviceId(): string | null {
+    const track = this.stream?.getVideoTracks()[0];
+    return track?.getSettings().deviceId ?? null;
+  }
+
+  get activeLabel(): string | null {
+    return this.stream?.getVideoTracks()[0]?.label ?? null;
+  }
+
   /** Called from a user gesture. Resolves once the first frame has real dimensions. */
   async start(opts: CameraOptions = {}): Promise<void> {
     if (this.stream) return;

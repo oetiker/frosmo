@@ -74,11 +74,20 @@ milliseconds, which is usually faster than the inspector.
 Once, per rig:
 
 1. Clip the mirror over the camera so it looks at the table.
-2. Drag the four handles onto the corners of the play area.
-3. Check the preview looks like your table, the right way round. **Rotate** and
+2. Pick the **camera**, if the device has more than one. A reflector clipped
+   over the front camera wants that one; a tablet propped face-down on a stand
+   wants the back one; a laptop with a mirror on a book wants whichever webcam
+   points at the table.
+3. Drag the four handles onto the corners of the play area.
+4. Check the preview looks like your table, the right way round. **Rotate** and
    **Mirror** fix the orientation — a reflector reverses handedness and a bare
    camera does not.
-4. Clear the table and save; the app learns what empty looks like.
+5. Clear the table and save; the app learns what empty looks like.
+
+The choice of camera is remembered, and the calibration remembers which camera
+made it. Four corners only mean anything in the frame they were marked in, so
+if you later play with a different camera the game says so and sends you back
+here, rather than reacting to the wrong part of the world.
 
 There is no list of supported tablets and no model of the mirror. Those four
 corners are the entire rig model, which is why this works with hardware nobody

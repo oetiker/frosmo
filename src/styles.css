@@ -588,3 +588,16 @@ label {
     overflow-y: auto;
   }
 }
+
+.cal-camera {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+}
+
+/* The mismatch overlay carries an action, so it needs to stack and breathe. */
+.play-overlay {
+  gap: 18px;
+  align-content: center;
+}
