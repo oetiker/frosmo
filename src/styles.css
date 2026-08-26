@@ -510,6 +510,17 @@ label {
   max-width: 62ch;
 }
 
+/*
+ * The sheet is the one part of the app that is ink on paper, so it opts out of
+ * the browser's habit of stripping colour from print output. Tokens carry their
+ * colour as an SVG fill and survive this either way; borders, rules and any
+ * future tinted piece do not.
+ */
+.sheet {
+  -webkit-print-color-adjust: exact;
+  print-color-adjust: exact;
+}
+
 .sheet h2 {
   font-size: 16px;
   color: var(--muted);
@@ -542,11 +553,11 @@ label {
   gap: 2mm;
 }
 
+/* Colour lives in the SVG fill, not here: see token() in screens/print.ts. */
 .token {
+  display: block;
   width: 18mm;
   height: 18mm;
-  border-radius: 50%;
-  border: 0.4mm solid #1118;
 }
 
 @media print {
