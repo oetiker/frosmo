@@ -160,6 +160,35 @@ describe("OccupancyDetector", () => {
     });
   });
 
+  describe("with a sheet of paper on the table", () => {
+    /**
+     * Straight from a real capture: someone put the printed sheet on the
+     * table. It covers most of the play area, and everything the games care
+     * about is printed on it — so the one outcome that must not happen is the
+     * sheet being taken for a change of light and corrected away.
+     */
+    it("sees the sheet, and what is printed on it", () => {
+      const d = new OccupancyDetector(W, H, { denoise: 0 });
+      for (let i = 0; i < 10; i++) d.learn(emptyTable());
+
+      const scene = frameOf((x, y) => {
+        const onSheet = x >= 6 && x < 58 && y >= 4 && y < 44;
+        if (!onSheet) return [180, 175, 168];
+        // A dark disc printed on the sheet, like a colour token.
+        const dx = x - 32;
+        const dy = y - 24;
+        if (dx * dx + dy * dy < 36) return [190, 60, 55];
+        return [236, 234, 230];
+      });
+
+      d.detect(scene);
+      expect(d.mask.data[24 * W + 32]).toBe(1); // the printed disc
+      expect(d.mask.data[10 * W + 10]).toBe(1); // bare paper
+      expect(d.mask.data[46 * W + 32]).toBe(0); // table beside the sheet
+      expect(d.gain.g).toBeCloseTo(1, 1);
+    });
+  });
+
   describe("per-pixel noise", () => {
     it("demands more of a noisy region than a quiet one", () => {
       // Under a mirror the image is dim and the noise is uneven across the

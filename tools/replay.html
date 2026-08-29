@@ -1,0 +1,153 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>frosmo replay</title>
+<body>
+  <script type="module">
+    // Replays a captured diagnostic through the current detectors, in a real
+    // browser, so the glyph atlas and the canvas crops behave exactly as they
+    // do on the device. Driven by tools/replay.mjs.
+    import { buildAtlas } from "/src/vision/glyph.ts";
+    import { detectTiles } from "/src/vision/tiles.ts";
+    import { labelBlobs } from "/src/vision/blobs.ts";
+    import { classifyColor } from "/src/vision/color.ts";
+    import { OccupancyDetector } from "/src/vision/occupancy.ts";
+    import { boardSize, boardToCamera } from "/src/vision/calibration.ts";
+    import { applyHomography } from "/src/vision/homography.ts";
+    import { buildSampleTable, createRectifiedFrame, rectify } from "/src/vision/rectify.ts";
+
+    const load = (src) =>
+      new Promise((ok, fail) => {
+        const img = new Image();
+        img.onload = () => ok(img);
+        img.onerror = fail;
+        img.src = src;
+      });
+
+    function pixels(img) {
+      const c = document.createElement("canvas");
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      const ctx = c.getContext("2d", { willReadFrequently: true });
+      ctx.drawImage(img, 0, 0);
+      return { ctx, w: c.width, h: c.height, data: ctx.getImageData(0, 0, c.width, c.height).data };
+    }
+
+    /** A CropSource reading the captured still instead of a live video. */
+    class StillCropSource {
+      constructor(still, boardToCam, board) {
+        this.still = still;
+        this.boardToCam = boardToCam;
+        this.board = board;
+      }
+      sample(cx, cy, side, angle, out, outSize) {
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        const step = side / outSize;
+        const { data, w, h } = this.still;
+        for (let y = 0; y < outSize; y++) {
+          const ly = (y - outSize / 2 + 0.5) * step;
+          for (let x = 0; x < outSize; x++) {
+            const lx = (x - outSize / 2 + 0.5) * step;
+            const p = applyHomography(
+              this.boardToCam,
+              (cx + lx * cos - ly * sin + 0.5) / this.board.w,
+              (cy + lx * sin + ly * cos + 0.5) / this.board.h,
+            );
+            const sx = Math.round(p.x);
+            const sy = Math.round(p.y);
+            if (sx < 0 || sy < 0 || sx >= w || sy >= h) {
+              out[y * outSize + x] = 255;
+              continue;
+            }
+            const o = (sy * w + sx) * 4;
+            out[y * outSize + x] = (data[o] * 77 + data[o + 1] * 150 + data[o + 2] * 29) >> 8;
+          }
+        }
+        return true;
+      }
+    }
+
+    window.replay = async (bundle, opts) => {
+      const cal = bundle.calibration;
+      const board = boardSize(cal);
+
+      const raw = pixels(await load(bundle.images.raw));
+      const bgImg = pixels(await load(bundle.images.background));
+
+      // Rectify the captured frame exactly as the pipeline would.
+      const frame = createRectifiedFrame(board);
+      const table = buildSampleTable(boardToCamera(cal, raw.w, raw.h), board, raw.w, raw.h);
+      rectify(raw.data, table, frame);
+
+      // Rebuild the detector's reference from the captured background image.
+      const bgFrame = createRectifiedFrame(board);
+      bgFrame.rgba.set(bgImg.data);
+      for (let i = 0; i < board.w * board.h; i++) {
+        const o = i * 4;
+        bgFrame.gray[i] = (bgImg.data[o] * 77 + bgImg.data[o + 1] * 150 + bgImg.data[o + 2] * 29) >> 8;
+      }
+      const detector = new OccupancyDetector(board.w, board.h, bundle.occupancy);
+      for (let i = 0; i < 12; i++) detector.learn(bgFrame);
+      const covered = detector.detect(frame);
+
+      const { blobs } = labelBlobs(detector.mask, {
+        rgba: frame.rgba,
+        minArea: Math.round(board.w * board.h * 0.0008),
+        limit: 40,
+      });
+
+      const gain = detector.gain;
+      const tokens = blobs.map((b) => {
+        const m = classifyColor(
+          Math.min(255, b.r * gain.r),
+          Math.min(255, b.g * gain.g),
+          Math.min(255, b.b * gain.b),
+          opts.palette ? { palette: opts.palette } : {},
+        );
+        return { color: m.color, confidence: Number(m.confidence.toFixed(2)), area: b.area };
+      });
+
+      const atlas = buildAtlas(opts.alphabet);
+      const source = opts.native
+        ? new StillCropSource(raw, boardToCamera(cal, raw.w, raw.h), board)
+        : undefined;
+      const tiles = detectTiles(frame, blobs, atlas, { source, minMargin: 0, minScore: 0 });
+
+      // Hand a few crops back as images, so they can simply be looked at.
+      const crops = [];
+      if (source) {
+        for (const tile of tiles.slice(0, 8)) {
+          const size = 48;
+          const buf = new Uint8ClampedArray(size * size);
+          source.sample(tile.cx, tile.cy, tile.size, 0, buf, size);
+          const c = document.createElement("canvas");
+          c.width = c.height = size;
+          const ctx = c.getContext("2d");
+          const img = ctx.createImageData(size, size);
+          for (let i = 0; i < size * size; i++) {
+            img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = buf[i];
+            img.data[i * 4 + 3] = 255;
+          }
+          ctx.putImageData(img, 0, 0);
+          crops.push(c.toDataURL("image/png"));
+        }
+      }
+
+      return {
+        board,
+        gain: { r: +gain.r.toFixed(3), g: +gain.g.toFixed(3), b: +gain.b.toFixed(3) },
+        coveredFraction: +(covered / (board.w * board.h)).toFixed(3),
+        blobs: blobs.length,
+        tokens,
+        tiles: tiles.map((t) => ({
+          char: t.char,
+          score: +t.score.toFixed(2),
+          margin: +t.margin.toFixed(2),
+          size: +t.size.toFixed(1),
+        })),
+        crops,
+      };
+    };
+    window.replayReady = true;
+  </script>
+</body>

@@ -72,6 +72,11 @@ camera made it apply, and live controls for the detection thresholds — the
 numbers that decide whether the board works can only be judged under a real
 mirror in a real room.
 
+`npm run replay <diagnostic.json>` plays a captured file back through the
+current detectors, in a real browser, and reports what they make of it — the
+only way to work on this code without the rig in front of you. Captures contain
+a photograph of the room, so they are gitignored rather than committed.
+
 **Capture diagnostic** in that screen packages one moment of the real rig — the
 full-resolution camera frame, the rectified board, the learned reference, the
 current masks and every setting that produced them — into a single file you can

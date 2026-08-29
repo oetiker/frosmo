@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "smoke": "node tools/smoke.mjs",
-    "fake-camera": "node tools/make-fake-camera.mjs"
+    "fake-camera": "node tools/make-fake-camera.mjs",
+    "replay": "node tools/replay.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.3.0",

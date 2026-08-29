@@ -5,3 +5,8 @@ dist/
 
 # Browser smoke-test output: screenshots and a 55MB synthetic camera clip
 .smoke/
+
+# Replay output from tools/replay.mjs
+.replay/
+# Extracted diagnostic captures — real photos of someone's room
+.diag/
