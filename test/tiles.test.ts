@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { labelBlobs } from "../src/vision/blobs.js";
 import { GLYPH_SIZE, type GlyphAtlas } from "../src/vision/glyph.js";
-import { OccupancyDetector } from "../src/vision/occupancy.js";
+import { createMask } from "../src/vision/mask.js";
 import { createRectifiedFrame, type RectifiedFrame } from "../src/vision/rectify.js";
-import { detectTiles, foldAngle } from "../src/vision/tiles.js";
+import {
+  detectTiles,
+  foldAngle,
+  glyphCandidate,
+  glyphLimits,
+  glyphMinArea,
+  GLYPH_LIMITS,
+} from "../src/vision/tiles.js";
 
 const W = 200;
 const H = 150;
@@ -67,23 +74,30 @@ const SHAPES = {
   T: ["####", ".#..", ".#..", ".#.."],
 };
 
+/**
+ * Find tiles the way the pipeline now does: from ink, not from occupancy.
+ *
+ * A printed tile on a white sheet is not an object on the table — its body
+ * matches the paper it is printed on, and only the glyph is dark. So the mask
+ * here is the dark marks, which is what the ink detector produces, and the
+ * blobs are letters rather than tile bodies.
+ */
 function findTiles(place: (f: RectifiedFrame) => void) {
-  const detector = new OccupancyDetector(W, H, { denoise: 1, drift: 0 });
-  for (let i = 0; i < 6; i++) detector.learn(blank());
-
   const scene = blank();
   place(scene);
-  detector.detect(scene);
 
-  const { blobs } = labelBlobs(detector.mask, { rgba: scene.rgba, minArea: 60 });
-  return detectTiles(scene, blobs, atlasFrom(SHAPES), { minArea: 100 });
+  const ink = createMask(W, H);
+  for (let i = 0; i < W * H; i++) ink.data[i] = scene.gray[i] < 128 ? 1 : 0;
+
+  const { blobs } = labelBlobs(ink, { rgba: scene.rgba, minArea: glyphMinArea(W, H) });
+  return detectTiles(scene, blobs, atlasFrom(SHAPES));
 }
 
 describe("detectTiles", () => {
   it("reads two tiles and keeps them in place", () => {
     const tiles = findTiles((f) => {
-      drawTile(f, 60, 70, 40, SHAPES.L);
-      drawTile(f, 140, 70, 40, SHAPES.T);
+      drawTile(f, 60, 70, 16, SHAPES.L);
+      drawTile(f, 140, 70, 16, SHAPES.T);
     }).sort((a, b) => a.cx - b.cx);
 
     expect(tiles.map((t) => t.char)).toEqual(["L", "T"]);
@@ -94,20 +108,20 @@ describe("detectTiles", () => {
 
   it("reads a tile that is not the same size as the others", () => {
     const tiles = findTiles((f) => {
-      drawTile(f, 55, 60, 30, SHAPES.L);
-      drawTile(f, 140, 80, 52, SHAPES.T);
+      drawTile(f, 55, 60, 13, SHAPES.L);
+      drawTile(f, 140, 80, 19, SHAPES.T);
     }).sort((a, b) => a.cx - b.cx);
     expect(tiles.map((t) => t.char)).toEqual(["L", "T"]);
   });
 
   it("reports a margin over the runner-up for every tile it reads", () => {
-    const tiles = findTiles((f) => drawTile(f, 100, 75, 44, SHAPES.L));
+    const tiles = findTiles((f) => drawTile(f, 100, 75, 16, SHAPES.L));
     expect(tiles).toHaveLength(1);
     expect(tiles[0].margin).toBeGreaterThan(0);
     expect(tiles[0].score).toBeGreaterThan(0.4);
   });
 
-  it("ignores a blob that is not tile-shaped", () => {
+  it("ignores a mark that is not glyph-shaped", () => {
     // A pen lying on the table: right darkness, wrong geometry.
     const tiles = findTiles((f) => {
       for (let y = 70; y < 76; y++) {
@@ -140,5 +154,62 @@ describe("foldAngle", () => {
       const folded = foldAngle((d * Math.PI) / 180);
       expect(Math.abs(folded)).toBeLessThanOrEqual(Math.PI / 4 + 1e-9);
     }
+  });
+});
+
+describe("glyphCandidate, against shapes measured from a real capture", () => {
+  const blob = (bw: number, bh: number, fill: number) => {
+    const area = Math.round(bw * bh * fill);
+    return { id: 1, area, cx: 0, cy: 0, minX: 0, minY: 0, maxX: bw - 1, maxY: bh - 1, r: 0, g: 0, b: 0, angle: 0, elongation: 1 };
+  };
+
+  it("accepts the letters as they actually appeared", () => {
+    // Straight from the capture: area, bounding box and fill of real letters.
+    for (const [bw, bh, fill] of [
+      [9, 11, 0.62],
+      [8, 16, 0.51],
+      [16, 18, 0.48],
+      [13, 18, 0.55],
+      [10, 7, 0.64],
+      [5, 17, 0.29],
+    ] as const) {
+      expect(glyphCandidate(blob(bw, bh, fill))).toBe("ok");
+    }
+  });
+
+  it("rejects a tile's printed border", () => {
+    // A big hollow ring. This is the shape that has to reject itself, because
+    // it surrounds the very glyph we want and would otherwise be read instead.
+    // Rejected for being a long hollow box. Which rule catches it first is an
+    // implementation detail; that it never reaches the recogniser is not.
+    expect(glyphCandidate(blob(87, 40, 0.12))).not.toBe("ok");
+    // This one isolates the fill test: square enough, small enough, but hollow.
+    expect(glyphCandidate(blob(34, 27, 0.16))).toBe("hollow");
+  });
+
+  it("rejects a line of caption text", () => {
+    expect(glyphCandidate(blob(36, 10, 0.47))).toBe("wrong-shape");
+  });
+
+  it("rejects sensor speckle", () => {
+    expect(glyphCandidate(blob(3, 3, 0.9))).toBe("too-small");
+  });
+
+  it("scales its minimum area with the board", () => {
+    // The pipeline's general blob minimum is tuned for tokens and would have
+    // discarded most of these letters before they were ever looked at.
+    expect(glyphMinArea(320, 240)).toBeLessThan(Math.round(320 * 240 * 0.0008));
+    expect(glyphMinArea(320, 240)).toBeGreaterThanOrEqual(8);
+    expect(glyphMinArea(192, 144)).toBeLessThan(glyphMinArea(320, 240));
+  });
+
+  it("honours overridden limits", () => {
+    expect(glyphCandidate(blob(9, 11, 0.62), { ...GLYPH_LIMITS, minFill: 0.9 })).toBe("hollow");
+  });
+
+  it("scales with the board rather than assuming one size", () => {
+    // The same sheet on a smaller board has proportionally smaller letters.
+    expect(glyphLimits(192, 144).maxArea).toBeLessThan(glyphLimits(320, 240).maxArea);
+    expect(glyphLimits(640, 480).minHeight).toBeGreaterThan(glyphLimits(320, 240).minHeight);
   });
 });

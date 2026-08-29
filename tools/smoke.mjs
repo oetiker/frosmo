@@ -166,30 +166,36 @@ async function main() {
     await page.waitForTimeout(1500);
     check("the synthetic clip reaches its pieces phase", await waitForPhase("pieces"));
 
+    // Read the individual values rather than the panel's rendered text: the
+    // readout is laid out for a human, and a test that parses that layout
+    // breaks every time the layout improves.
+    const stat = (name) => page.locator(`[data-stat="${name}"]`).innerText();
+
     let readout = "";
     let learned = false;
     const deadline = Date.now() + 6000;
     while (Date.now() < deadline) {
-      readout = await page.locator(".lab-readout").innerText();
-      if (/blobs [3-9]/.test(readout) && !readout.includes("not learned")) {
+      const blobs = Number(await stat("blobs"));
+      const warning = (await stat("warning")).trim();
+      if (blobs >= 3 && warning === "") {
         learned = true;
         break;
       }
       await page.waitForTimeout(150);
     }
+    readout = `blobs ${(await stat("blobs")).trim()} · tokens ${(await stat("tokens")).trim()}`;
 
     check("finds the three pieces on the table", learned, readout.replace(/\n/g, " · "));
+    const tokenCounts = (await stat("tokens")).trim();
+    const counted = (colour) => Number(tokenCounts.match(new RegExp(`${colour}\\s+(\\d+)`))?.[1] ?? 0);
     check(
       "reads their colours through the mirror",
-      /red/.test(readout) && /green/.test(readout) && /blue/.test(readout),
-      readout.match(/tokens [^\n]*/)?.[0] ?? "no tokens line",
+      counted("red") > 0 && counted("green") > 0 && counted("blue") > 0,
+      tokenCounts,
     );
 
-    check(
-      "and reports the exposure it corrected for",
-      /exposure \d/.test(readout),
-      readout.match(/exposure [^\n]*/)?.[0] ?? "not reported",
-    );
+    const exposure = (await stat("exposure")).trim();
+    check("and reports the exposure it corrected for", /^\d/.test(exposure), exposure || "not reported");
 
     const timings = await page.locator(".lab-timings").innerText();
     console.log(`\n${timings.split("\n").map((l) => `        ${l}`).join("\n")}\n`);

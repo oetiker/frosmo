@@ -638,3 +638,27 @@ label {
   width: 20px;
   height: 20px;
 }
+
+/* The readout is a table of live numbers: fixed columns, so a value changing
+   width never moves anything else on the screen. */
+.lab-readout {
+  min-width: 260px;
+}
+
+.lab-row {
+  display: flex;
+  gap: 10px;
+  line-height: 1.5;
+  min-height: 1.5em;
+}
+
+.lab-key {
+  flex: 0 0 62px;
+  color: var(--muted);
+}
+
+.lab-value {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, Menlo, monospace;
+  white-space: pre;
+}

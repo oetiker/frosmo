@@ -33,7 +33,7 @@ export function labScreen(): Screen {
       const ink = h("canvas", { class: "lab-canvas", width: String(board.w), height: String(board.h) });
       const found = h("canvas", { class: "lab-canvas", width: String(board.w), height: String(board.h) });
       const timings = h("div", { class: "lab-timings" });
-      const readout = h("div", { class: "lab-readout" });
+      const readout = new Readout();
       const status = h("div", { class: "cal-status" }, "Starting the camera…");
       const controls = h("div", { class: "lab-controls" });
 
@@ -64,7 +64,7 @@ export function labScreen(): Screen {
             panel("Ink — adaptive threshold", ink),
             panel("Tokens and tiles", found),
           ),
-          h("div", { class: "lab-side" }, status, timings, readout, controls),
+          h("div", { class: "lab-side" }, status, timings, readout.el, controls),
         ),
       );
 
@@ -145,7 +145,7 @@ export function labScreen(): Screen {
             drawMaskCanvas(ink, state.ink, [235, 200, 120]);
             drawFound(found, state);
             renderTimings(timings, state);
-            renderReadout(readout, state, app);
+            readout.update(state, app);
           });
         })
         .catch((e) => {
@@ -277,35 +277,68 @@ function renderTimings(el: HTMLElement, state: VisionState): void {
   );
 }
 
-function renderReadout(el: HTMLElement, state: VisionState, app: App): void {
-  const pct = ((state.coveredPixels / (state.board.w * state.board.h)) * 100).toFixed(1);
-  const detector = app.pipeline.occupancyDetector;
-  el.textContent = "";
-  el.append(
-    h("div", {}, `board ${state.board.w}×${state.board.h}`),
-    h("div", {}, `covered ${pct}%`),
-    h("div", {}, `blobs ${state.blobs.length}`),
-    h(
-      "div",
-      {},
-      `tokens ${state.tokens.map((t) => t.color).join(", ") || "—"}`,
-    ),
-    h(
-      "div",
-      {},
-      `tiles ${state.tiles.map((t) => `${t.char}(${t.margin.toFixed(2)})`).join(" ") || "—"}`,
-    ),
-  );
-  if (detector) {
-    // The exposure the camera applied behind our backs. Near 1.00 means it is
-    // holding still; anything else means auto-exposure was about to be blamed
-    // for a detector's behaviour.
-    el.append(h("div", {}, `exposure ${describeGain(detector.gain)}`));
-    if (detector.suspect) {
-      el.append(
-        h("div", { class: "error" }, "board reads as covered — the reference is probably stale"),
+/**
+ * The live readout.
+ *
+ * Built once, then only its values change. Rebuilding these rows every frame
+ * reflowed the whole panel thirty times a second — and the two rows that vary
+ * in length, tokens and tiles, dragged everything below them up and down while
+ * you were trying to read it. So both are rendered at a fixed shape: tokens as
+ * a count per colour in a constant order rather than one entry per token, and
+ * the tile reading clipped to a fixed width.
+ */
+class Readout {
+  readonly el: HTMLElement;
+  private readonly rows = new Map<string, HTMLElement>();
+
+  constructor() {
+    this.el = h("div", { class: "lab-readout" });
+    for (const key of ["board", "covered", "blobs", "exposure", "tokens", "tiles", "warning"]) {
+      // A stable hook for the browser test: it reads these values to decide
+      // whether the pipeline is seeing anything, and should not have to parse
+      // rendered text that exists for a human's benefit.
+      const value = h("span", { class: "lab-value", "data-stat": key }, "");
+      const row = h(
+        "div",
+        { class: key === "warning" ? "lab-row warning" : "lab-row" },
+        h("span", { class: "lab-key" }, key === "warning" ? "" : key),
+        value,
       );
+      this.rows.set(key, value);
+      this.el.append(row);
     }
   }
-  if (!state.ready) el.append(h("div", { class: "error" }, "empty board not learned yet"));
+
+  private set(key: string, text: string, error = false): void {
+    const el = this.rows.get(key)!;
+    if (el.textContent !== text) el.textContent = text;
+    el.classList.toggle("error", error);
+  }
+
+  update(state: VisionState, app: App): void {
+    const detector = app.pipeline.occupancyDetector;
+    const pixels = state.board.w * state.board.h;
+
+    this.set("board", `${state.board.w}×${state.board.h}`);
+    this.set("covered", `${((state.coveredPixels / pixels) * 100).toFixed(1)}%`);
+    this.set("blobs", String(state.blobs.length).padStart(3));
+    this.set("exposure", detector ? describeGain(detector.gain) : "—");
+
+    const counts = new Map<string, number>();
+    for (const token of state.tokens) counts.set(token.color, (counts.get(token.color) ?? 0) + 1);
+    // Full names, counts padded: the row keeps a constant width because the
+    // palette is fixed, so nothing shifts as tokens come and go.
+    const tokens = READOUT_COLORS.map((c) => `${c} ${String(counts.get(c) ?? 0).padStart(2)}`);
+    this.set("tokens", tokens.join("  "));
+
+    const read = state.tiles.map((t) => t.char).join("");
+    this.set("tiles", read ? `${read.slice(0, 24)} (${state.tiles.length})` : "—");
+
+    if (!state.ready) this.set("warning", "empty board not learned yet", true);
+    else if (detector?.suspect) this.set("warning", "board reads as covered — reference is stale", true);
+    else this.set("warning", "", false);
+  }
 }
+
+/** Fixed order, so the row never changes width as tokens come and go. */
+const READOUT_COLORS = ["red", "orange", "green", "blue"] as const;
