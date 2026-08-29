@@ -94,9 +94,49 @@ export function playScreen(gameId?: string): Screen {
         });
       });
 
+      // The overlay is rebuilt only when what it says changes: this runs inside
+      // the frame loop, and recreating a button thirty times a second would be
+      // both wasteful and impossible to tap.
+      let overlayMode = "";
+      const setOverlay = (mode: string, build: () => void) => {
+        if (overlayMode === mode) return;
+        overlayMode = mode;
+        overlay.className = mode ? "play-overlay show" : "play-overlay";
+        overlay.textContent = "";
+        build();
+      };
+
       const showLearning = () => {
-        overlay.className = "play-overlay show";
-        overlay.textContent = "Clear the play area…";
+        setOverlay("learning", () => {
+          overlay.append(h("div", {}, "Clear the play area…"));
+        });
+      };
+
+      /**
+       * The board reads as covered end to end for long enough that the stored
+       * reference, not the table, is the likely problem — a light was switched
+       * on, the rig was nudged, the paper was swapped. Say so and offer the one
+       * action that fixes it, rather than leaving a game that ignores the
+       * player and looks broken.
+       */
+      const showStaleBoard = () => {
+        setOverlay("stale", () => {
+          overlay.append(
+            h("div", {}, "The board doesn't look like it did."),
+            h("div", { class: "hud-detail" }, "Clear the play area, then set the empty board again."),
+            h(
+              "button",
+              {
+                class: "primary",
+                onclick: () => {
+                  app.pipeline.relearnBackground(LEARN_FRAMES);
+                  showLearning();
+                },
+              },
+              "Set the empty board",
+            ),
+          );
+        });
       };
 
       /**
@@ -107,19 +147,19 @@ export function playScreen(gameId?: string): Screen {
        * the wrong part of the world, which reads as the app being broken.
        */
       const showCameraMismatch = () => {
-        overlay.className = "play-overlay show";
-        overlay.textContent = "";
-        overlay.append(
-          h("div", {}, "This board was set up with a different camera."),
-          h(
-            "button",
-            { class: "primary", onclick: () => app.go("calibrate") },
-            "Set the board up again",
-          ),
-        );
+        setOverlay("mismatch", () => {
+          overlay.append(
+            h("div", {}, "This board was set up with a different camera."),
+            h(
+              "button",
+              { class: "primary", onclick: () => app.go("calibrate") },
+              "Set the board up again",
+            ),
+          );
+        });
       };
       const hideOverlay = () => {
-        overlay.className = "play-overlay";
+        setOverlay("", () => undefined);
       };
 
       app.pipeline.setNeeds(def.needs);
@@ -150,6 +190,10 @@ export function playScreen(gameId?: string): Screen {
 
             if (!vision.ready) {
               showLearning();
+              return;
+            }
+            if (app.pipeline.occupancyDetector?.suspect) {
+              showStaleBoard();
               return;
             }
             hideOverlay();

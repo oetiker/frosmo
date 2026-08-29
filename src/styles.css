@@ -612,3 +612,29 @@ label {
   gap: 18px;
   align-content: center;
 }
+
+.lab-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 220px;
+}
+
+.lab-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.lab-control input[type="range"] {
+  flex: 1 1 auto;
+  max-width: 130px;
+}
+
+.lab-control input[type="checkbox"] {
+  width: 20px;
+  height: 20px;
+}

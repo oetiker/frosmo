@@ -127,19 +127,46 @@ beats anything adaptive-per-pixel: it reacts instantly, costs one subtraction
 per pixel, and never learns a piece into the background because a child left it
 there for a minute.
 
-Three refinements earn their place:
+Four refinements earn their place. The first is not a refinement at all — it is
+the difference between this working and not, and it was learned the hard way on
+a real iPad, where the first version reported the whole board as covered.
+
+- **The camera adjusts itself, so every frame is scaled back onto the
+  reference's exposure before anything is compared.** Auto-exposure and auto
+  white balance react continuously to the scene: put a dark object on the table
+  and the camera brightens *everything*, so every pixel differs from a stored
+  reference at once. That is not a threshold in need of tuning — it is a
+  comparison between two pictures taken under different exposures. One gain per
+  channel corrects both effects (exposure moves the three together, white
+  balance moves them apart), estimated from **medians**, which are unmoved
+  until more than half the sampled pixels change. A mean would be dragged by the
+  first object placed on the table, which is precisely the case this exists to
+  handle.
+
+  The sampler steps through the image by a prime that is coprime with the pixel
+  count, rather than every nth pixel in scan order. Sampling on a fixed pitch
+  aligns with anything else on a fixed pitch — a row of tiles, a grid of
+  tokens — and can draw its entire sample from the objects instead of the table.
 
 - **The reference is an average of a dozen frames**, not a snapshot. A single
   frame carries that instant's sensor noise into every later difference, and
   that noise is the same order as the threshold.
+- **Every pixel has its own threshold**, from the variance learned alongside the
+  mean. Under a mirror the image is dim, the sensor gain is high, and the noise
+  is not uniform across the frame — a single global threshold has to be set for
+  the worst part of it, and is then far too blunt everywhere else. A pixel must
+  differ by a multiple of *its own* noise, with an absolute floor beneath.
+
+  This has a useful side effect: a pixel that was inconsistent while the
+  reference was being learned gets a wide threshold automatically, so a
+  reference taken while something was moving distrusts exactly the region that
+  was moving.
 - **Shadow rejection.** A hand reaching in throws a shadow twice its own size,
   and a naive threshold treats the shadow as an object. A shadow scales all
   three channels roughly equally, so comparing *chromaticity* — colour with
   brightness divided out — rejects it while keeping genuinely dark objects.
-- **Slow drift correction**, applied every twelfth frame. Room lights and the
-  tablet's own auto-exposure move over minutes; tracking that per-frame costs
-  four float operations on nearly every pixel to follow something that has not
-  measurably changed since the last frame.
+- **Slow drift correction**, applied every twelfth frame, for the residue the
+  gain correction does not cover.
 
 Nothing is reported while the reference is being learned. A half-learned
 background produces blobs that are pure artefact, and a game acting on them
@@ -147,7 +174,10 @@ would score the player for clearing the table.
 
 **Fails on:** a play surface that is genuinely moved mid-game; a piece the exact
 brightness of the table; someone changing the room lighting abruptly. All three
-are fixed by the relearn button, which is on every game's HUD.
+are fixed by relearning the empty board — and rather than leave a player staring
+at a game that ignores them, the detector notices this state itself: a board
+that reads as almost entirely covered for a sustained period says so, and the
+game offers the one action that fixes it.
 
 ### Ink — drawn lines
 
@@ -272,12 +302,17 @@ Measured with `npx vite-node tools/bench.ts`, board 256×192, every detector:
 
 | Stage | Cost |
 |---|---|
-| occupancy | 0.77 ms |
-| ink | 0.98 ms |
-| field (blur) | 0.41 ms |
-| blobs | 0.26 ms |
-| contours | 0.82 ms |
-| **all detectors** | **3.24 ms** |
+| occupancy | 1.56 ms |
+| ↳ of which, exposure estimation | 0.21 ms |
+| ink | 1.45 ms |
+| field (blur) | 0.68 ms |
+| blobs | 0.37 ms |
+| contours | 1.29 ms |
+| **all detectors** | **5.37 ms** |
+
+Occupancy doubled when exposure correction and the per-pixel noise model went
+in. That is the right trade: the cheaper version did not work on a real
+tablet.
 
 Per-frame allocation is zero: the blur, labelling and contour stages take
 reusable buffers sized with the board. Before that they allocated roughly 400 KB

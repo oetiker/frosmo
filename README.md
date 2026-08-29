@@ -66,8 +66,18 @@ Camera access works in home-screen web apps from iOS 14.3 onward. On older
 versions, run it in Safari rather than installed.
 
 To debug on the device, connect it to a Mac and use Safari's Develop menu; the
-**Vision lab** screen in the app shows every pipeline stage and its cost in
-milliseconds, which is usually faster than the inspector.
+**Vision lab** screen in the app is usually faster than the inspector. It shows
+every pipeline stage, its cost in milliseconds, the exposure correction the
+camera made it apply, and live controls for the detection thresholds — the
+numbers that decide whether the board works can only be judged under a real
+mirror in a real room.
+
+**Capture diagnostic** in that screen packages one moment of the real rig — the
+full-resolution camera frame, the rectified board, the learned reference, the
+current masks and every setting that produced them — into a single file you can
+share off the device. That file is enough to reproduce a detector's behaviour
+exactly, and to turn "the tokens don't work" into a fixture with a failing
+test.
 
 ## Setting up the board
 
