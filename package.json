@@ -9,6 +9,8 @@
     "build": "tsc --noEmit && vite build && node tools/gen-sw.mjs",
     "preview": "vite preview --host",
     "icons": "node tools/make-icons.mjs",
+    "glyphs:render": "node tools/render-glyphs.mjs",
+    "glyphs:train": "vite-node tools/train-glyphs.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

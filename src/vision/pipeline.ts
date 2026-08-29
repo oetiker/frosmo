@@ -17,13 +17,13 @@ import { boardSize, boardToCamera, type Calibration } from "./calibration.js";
 import { classifyColor, type TokenColor } from "./color.js";
 import { IDENTITY_GAIN } from "./photometry.js";
 import { simplify, traceContours, type Contour } from "./contour.js";
-import { buildAtlas, DEFAULT_DIGITS, DEFAULT_LETTERS, type GlyphAtlas } from "./glyph.js";
 import { InkDetector } from "./ink.js";
 import { VideoCropSource } from "./native-crop.js";
 import { blurToField, createMask, type Mask } from "./mask.js";
 import { OccupancyDetector } from "./occupancy.js";
 import { buildSampleTable, createRectifiedFrame, rectify, type BoardSize, type RectifiedFrame } from "./rectify.js";
-import { detectTiles, glyphMinArea, type Tile } from "./tiles.js";
+import { glyphMinArea } from "./tiles.js";
+import { TileReader, type TileReading } from "./tile-reader.js";
 
 export interface VisionNeeds {
   /** The covered-pixel mask. Nearly everything wants this. */
@@ -84,7 +84,7 @@ export interface VisionState {
   field: Float32Array;
   blobs: Blob[];
   tokens: Token[];
-  tiles: Tile[];
+  tiles: TileReading[];
   contours: Contour[];
   coveredPixels: number;
   timings: Timings;
@@ -106,8 +106,6 @@ export interface Timings {
 export interface PipelineOptions {
   /** Fraction of the native camera resolution to read back each frame. */
   captureScale?: number;
-  /** Characters the tile detector may report. */
-  alphabet?: string;
 }
 
 export class VisionPipeline {
@@ -124,21 +122,19 @@ export class VisionPipeline {
   private blurScratch: Float32Array | null = null;
   private labelScratch: LabelScratch | null = null;
   private contourScratch: Uint8Array | null = null;
-  private readonly atlases = new Map<string, GlyphAtlas>();
+  private readonly tileReader = new TileReader();
   private cropSource: VideoCropSource | null = null;
   private cropSourceFor = { w: 0, h: 0 };
   private needs: VisionNeeds = { occupancy: true };
   private learning = 0;
   private state: VisionState | null = null;
   private readonly captureScale: number;
-  private readonly alphabet: string;
 
   constructor(
     private readonly camera: Camera,
     opts: PipelineOptions = {},
   ) {
     this.captureScale = opts.captureScale ?? 0.5;
-    this.alphabet = opts.alphabet ?? DEFAULT_LETTERS + DEFAULT_DIGITS;
   }
 
   setCalibration(cal: Calibration): void {
@@ -208,16 +204,9 @@ export class VisionPipeline {
     return this.occupancy;
   }
 
-  /** The atlas, built lazily because it needs a DOM canvas. */
-  glyphAtlas(alphabet = this.alphabet): GlyphAtlas {
-    // One atlas per alphabet, built once. Rendering thirty-six glyphs costs a
-    // few milliseconds, and games switch alphabets only when they are entered.
-    let atlas = this.atlases.get(alphabet);
-    if (!atlas) {
-      atlas = buildAtlas(alphabet);
-      this.atlases.set(alphabet, atlas);
-    }
-    return atlas;
+  /** Forget cached tile readings; the board or the camera has changed under us. */
+  resetTiles(): void {
+    this.tileReader.reset();
   }
 
   /** Process the current camera frame. Returns null until calibration and camera are both up. */
@@ -348,15 +337,18 @@ export class VisionPipeline {
     // several times too large for a letter, which would discard most of them
     // before they were ever looked at.
     const tiles = this.needs.tiles
-      ? detectTiles(
+      ? this.tileReader.read(
           frame,
           labelBlobs(inkDetector.mask, {
             minArea: glyphMinArea(this.board.w, this.board.h),
             limit: 96,
             scratch: this.labelScratch ?? undefined,
           }).blobs,
-          this.glyphAtlas(this.needs.alphabet ?? this.alphabet),
-          { source: this.tileCropSource(cal) ?? undefined },
+          {
+            alphabet: this.needs.alphabet,
+            source: this.tileCropSource(cal) ?? undefined,
+            rotationFallback: true,
+          },
         )
       : [];
     t.tiles = performance.now() - mark;
