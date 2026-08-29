@@ -36,6 +36,14 @@ export interface GlyphAtlas {
   readonly font: string;
 }
 
+export interface MatchOptions {
+  /**
+   * Penalty applied to a match found at a quarter turn, so upright wins ties.
+   * Zero restores a straight contest between all four orientations.
+   */
+  rotationPenalty?: number;
+}
+
 export interface GlyphMatch {
   char: string;
   /** Agreement with the winning template, 0-1. */
@@ -181,8 +189,22 @@ export function otsu(gray: Uint8ClampedArray): number {
  * cheaper and more reliable than guessing there — and it means a tile dropped
  * sideways still reads.
  */
-export function matchGlyph(sample: Uint8Array, atlas: GlyphAtlas): GlyphMatch | null {
+export function matchGlyph(
+  sample: Uint8Array,
+  atlas: GlyphAtlas,
+  opts: MatchOptions = {},
+): GlyphMatch | null {
   if (atlas.chars.length === 0) return null;
+
+  // How much better a sideways reading must be before it beats an upright one.
+  //
+  // Trying every quarter turn is what lets a tile dropped sideways still read,
+  // but on a sheet of upright letters it invents ambiguity that is not there:
+  // M and W are the same shape turned over, as are N and Z, and 6 and 9. Left
+  // to a straight contest those pairs trade places on noise. Upright is the
+  // overwhelmingly common case, so it wins ties and near-ties, and a rotated
+  // reading has to earn it.
+  const rotationPenalty = opts.rotationPenalty ?? 0.08;
 
   let bestScore = -1;
   let bestChar = "";
@@ -192,7 +214,7 @@ export function matchGlyph(sample: Uint8Array, atlas: GlyphAtlas): GlyphMatch | 
   for (let rot = 0; rot < 4; rot++) {
     const rotated = rot === 0 ? sample : rotateQuarter(sample, rot as 1 | 2 | 3);
     for (let i = 0; i < atlas.templates.length; i++) {
-      const score = agreement(rotated, atlas.templates[i]);
+      const score = agreement(rotated, atlas.templates[i]) - (rot === 0 ? 0 : rotationPenalty);
       if (score > bestScore) {
         // Only a different character counts as a runner-up: the same letter
         // scoring well at two rotations is agreement, not ambiguity.
