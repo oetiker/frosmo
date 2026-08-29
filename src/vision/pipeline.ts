@@ -39,6 +39,18 @@ export interface VisionNeeds {
   /** Printed letter and digit tiles, read. */
   tiles?: boolean;
   /**
+   * The characters this game actually uses.
+   *
+   * The same argument as `palette`, and the same evidence. Matched against all
+   * twenty-six letters and ten digits at once, a printed D competes with 0 and
+   * an A with 4 — and loses, while digits, having only nine rivals, read well.
+   * Three of the first four misreadings observed on a real sheet were a letter
+   * mistaken for a digit; the one that was correct, F, is the one with no digit
+   * that resembles it. A spelling game never needs digits, so it should not be
+   * made to argue with them.
+   */
+  alphabet?: string;
+  /**
    * The colours this game actually uses.
    *
    * Not a filter applied afterwards — the classifier is restricted to these,
@@ -112,7 +124,7 @@ export class VisionPipeline {
   private blurScratch: Float32Array | null = null;
   private labelScratch: LabelScratch | null = null;
   private contourScratch: Uint8Array | null = null;
-  private atlas: GlyphAtlas | null = null;
+  private readonly atlases = new Map<string, GlyphAtlas>();
   private cropSource: VideoCropSource | null = null;
   private cropSourceFor = { w: 0, h: 0 };
   private needs: VisionNeeds = { occupancy: true };
@@ -197,9 +209,15 @@ export class VisionPipeline {
   }
 
   /** The atlas, built lazily because it needs a DOM canvas. */
-  glyphAtlas(): GlyphAtlas {
-    if (!this.atlas) this.atlas = buildAtlas(this.alphabet);
-    return this.atlas;
+  glyphAtlas(alphabet = this.alphabet): GlyphAtlas {
+    // One atlas per alphabet, built once. Rendering thirty-six glyphs costs a
+    // few milliseconds, and games switch alphabets only when they are entered.
+    let atlas = this.atlases.get(alphabet);
+    if (!atlas) {
+      atlas = buildAtlas(alphabet);
+      this.atlases.set(alphabet, atlas);
+    }
+    return atlas;
   }
 
   /** Process the current camera frame. Returns null until calibration and camera are both up. */
@@ -337,7 +355,7 @@ export class VisionPipeline {
             limit: 96,
             scratch: this.labelScratch ?? undefined,
           }).blobs,
-          this.glyphAtlas(),
+          this.glyphAtlas(this.needs.alphabet ?? this.alphabet),
           { source: this.tileCropSource(cal) ?? undefined },
         )
       : [];

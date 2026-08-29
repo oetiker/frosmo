@@ -34,6 +34,8 @@ export interface TileOptions {
   source?: CropSource;
   /** Rotation to correct for, in radians. Zero unless the whole board is askew. */
   angle?: number;
+  /** How much better a sideways reading must be to beat an upright one. */
+  rotationPenalty?: number;
 }
 
 /** Oversampling factor for the crop, so normalisation has detail to work with. */
@@ -77,7 +79,9 @@ export function detectTiles(
       sampleUpright(frame, blob.cx, blob.cy, side, angle, crop, CROP);
     }
 
-    const match = matchGlyph(normaliseGlyph(crop, CROP, CROP), atlas);
+    const match = matchGlyph(normaliseGlyph(crop, CROP, CROP), atlas, {
+      rotationPenalty: opts.rotationPenalty,
+    });
     if (!match || match.score < minScore || match.margin < minMargin) continue;
 
     const ink = meanInk(frame, blob);

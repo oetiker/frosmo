@@ -9,6 +9,7 @@
  * you.
  */
 
+import { DEFAULT_LETTERS } from "../vision/glyph.js";
 import { Stabiliser } from "../vision/stability.js";
 import type { GameDef, GameEnv, GameHud, GameInstance } from "./types.js";
 
@@ -200,7 +201,9 @@ export const spell: GameDef = {
   title: "Spell It",
   tagline: "Lay out tiles to make the word",
   emoji: "🔤",
-  needs: { occupancy: true, tiles: true },
+  // Letters only. Competing against the digits as well cost this game a D
+  // (read as 0) and an A (read as 4) on a real sheet.
+  needs: { occupancy: true, tiles: true, alphabet: DEFAULT_LETTERS },
   materials: [
     "Letter tiles — Osmo Words, Scrabble, or the sheet this app prints",
     "Lay them in one row, right way up",
