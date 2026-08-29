@@ -13,6 +13,7 @@
 
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:net";
 import { join, resolve } from "node:path";
 import { chromium } from "playwright";
 
@@ -27,7 +28,27 @@ const alphabetFlag = process.argv.indexOf("--alphabet");
 const alphabet =
   alphabetFlag > 0 ? process.argv[alphabetFlag + 1] : "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const OUT = process.env.REPLAY_OUT ?? resolve(".replay");
-const PORT = 5178;
+
+/**
+ * A port the kernel just told us is free, rather than a fixed one.
+ *
+ * The first version pinned 5178 with --strictPort. Interrupt the tool once and
+ * its vite child outlives it — nothing kills the server — and every later run
+ * dies on "port already in use", thirty seconds after the fact. Asking for
+ * port 0 and reading back what we got cannot collide with a previous run.
+ */
+const PORT = await freePort();
+
+function freePort() {
+  return new Promise((ok, fail) => {
+    const probe = createServer();
+    probe.on("error", fail);
+    probe.listen(0, () => {
+      const { port } = probe.address();
+      probe.close(() => ok(port));
+    });
+  });
+}
 
 const bundle = JSON.parse(readFileSync(file, "utf8"));
 
@@ -40,19 +61,43 @@ const vite = own
     })
   : null;
 
+// An interrupted run must not leave a server behind: without this the tool
+// poisons its own next invocation.
+const stopVite = () => {
+  try {
+    vite?.kill("SIGKILL");
+  } catch {
+    /* already gone */
+  }
+};
+process.on("exit", stopVite);
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => {
+    stopVite();
+    process.exit(130);
+  });
+}
+
 if (vite) {
   await new Promise((ok, fail) => {
     let log = "";
     const timer = setTimeout(() => fail(new Error(`vite did not start:\n${log}`)), 30000);
+    const done = (fn, arg) => {
+      clearTimeout(timer);
+      fn(arg);
+    };
     const watch = (d) => {
       log += d;
-      if (log.includes("Local:")) {
-        clearTimeout(timer);
-        setTimeout(ok, 500);
+      if (log.includes("Local:")) return void done(() => setTimeout(ok, 500));
+      // Report a server that failed at once, rather than after the full
+      // timeout: the error is already on screen and waiting adds nothing.
+      if (/error when starting dev server|EADDRINUSE|already in use/i.test(log)) {
+        done(fail, new Error(`vite failed to start:\n${log}`));
       }
     };
     vite.stdout.on("data", watch);
     vite.stderr.on("data", watch);
+    vite.on("exit", (code) => done(fail, new Error(`vite exited (${code}):\n${log}`)));
   });
 }
 
@@ -66,10 +111,15 @@ try {
   await page.goto(`http://localhost:${PORT}/tools/replay.html`);
   await page.waitForFunction(() => window.replayReady);
 
-  const result = await page.evaluate(
-    ([b, o]) => window.replay(b, o),
-    [bundle, { native, alphabet }],
-  );
+  // page.evaluate has no timeout of its own, so a detector that loops would
+  // hang this tool indefinitely with nothing on screen — which is exactly what
+  // happened the first time it was pointed at a real capture.
+  const result = await Promise.race([
+    page.evaluate(([b, o]) => window.replay(b, o), [bundle, { native, alphabet }]),
+    new Promise((_, fail) =>
+      setTimeout(() => fail(new Error("replay did not finish within 120s")), 120000),
+    ),
+  ]);
 
   mkdirSync(OUT, { recursive: true });
   result.crops.forEach((dataUrl, i) => {

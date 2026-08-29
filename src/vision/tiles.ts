@@ -67,13 +67,7 @@ export function detectTiles(
   const out: Tile[] = [];
 
   for (const blob of blobs) {
-    if (blob.area < minArea || blob.area > maxArea) continue;
-
-    const bw = blob.maxX - blob.minX + 1;
-    const bh = blob.maxY - blob.minY + 1;
-    const aspect = Math.max(bw / bh, bh / bw);
-    if (aspect > maxAspect) continue;
-    if (blob.area / (bw * bh) < minFill) continue;
+    if (tileCandidate(blob, { minArea, maxArea, minFill, maxAspect }) !== "ok") continue;
 
     // Rotate the sampling window by the blob's axis folded into +-45 degrees.
     // Beyond that a square tile is indistinguishable from itself, and the four
@@ -102,6 +96,40 @@ export function detectTiles(
 }
 
 /** Fold an angle into [-45, 45) degrees, expressed in radians. */
+/** Why a blob is not a tile, or "ok" if it might be one. */
+export type TileVerdict = "ok" | "too-small" | "too-large" | "not-square" | "not-solid";
+
+export interface CandidateLimits {
+  minArea: number;
+  maxArea: number;
+  minFill: number;
+  maxAspect: number;
+}
+
+/**
+ * Does this blob look like a tile at all?
+ *
+ * Split out of detectTiles so it can be measured. When tiles are not read,
+ * there are two very different causes — the crop was never taken, or it was
+ * taken and misread — and they call for completely different work. A filter
+ * buried in a loop can only be guessed at; one that names its verdict can be
+ * pointed at a real capture and asked.
+ */
+export function tileCandidate(blob: Blob, limits: CandidateLimits): TileVerdict {
+  if (blob.area < limits.minArea) return "too-small";
+  if (blob.area > limits.maxArea) return "too-large";
+
+  const bw = blob.maxX - blob.minX + 1;
+  const bh = blob.maxY - blob.minY + 1;
+  if (Math.max(bw / bh, bh / bw) > limits.maxAspect) return "not-square";
+  // A tile is convex and solid: its blob fills most of its bounding box. A
+  // grid of tiles printed edge to edge merges into one ragged region and fails
+  // here, which is the honest answer — that is not one tile.
+  if (blob.area / (bw * bh) < limits.minFill) return "not-solid";
+
+  return "ok";
+}
+
 export function foldAngle(angle: number): number {
   const quarter = Math.PI / 2;
   let a = angle % quarter;
