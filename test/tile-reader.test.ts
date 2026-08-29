@@ -114,6 +114,61 @@ describe("TileReader", () => {
     expect(reader.cached).toBe(0);
   });
 
+  it("does not let junk eat the budget frame after frame", () => {
+    // A real sheet offers far more junk than letters: border fragments, token
+    // rims, specks. If every one costs a slot every frame, the letters behind
+    // them are never reached and the board looks empty.
+    const reader = new TileReader();
+    const f = frame();
+    // Blank the left half; blobs there have nothing in them to read.
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W / 2; x++) {
+        f.gray[y * W + x] = 240;
+        const i = (y * W + x) * 4;
+        f.rgba[i] = f.rgba[i + 1] = f.rgba[i + 2] = 240;
+      }
+    const junk = Array.from({ length: 6 }, (_, i) => blob(i, 20 + i * 20, 60));
+    const real = blob(99, 250, 60);
+
+    // Junk comes first, so on the first frame it takes the whole budget.
+    expect(reader.read(f, [...junk, real], { ...permissive, budget: 6 })).toHaveLength(0);
+    // Second frame: the refusals are remembered, so the budget reaches the letter.
+    expect(reader.read(f, [...junk, real], { ...permissive, budget: 6 })).toHaveLength(1);
+  });
+
+  it("looks again when something is put down where it refused before", () => {
+    // A refusal is a claim about a place, and places change. A blob that grows
+    // is re-read, or a tile laid on top of a speck would stay invisible for as
+    // long as the refusal stood.
+    const reader = new TileReader();
+    const f = frame();
+    for (let y = 0; y < H; y++)
+      for (let x = 0; x < W / 2; x++) {
+        f.gray[y * W + x] = 240;
+        const i = (y * W + x) * 4;
+        f.rgba[i] = f.rgba[i + 1] = f.rgba[i + 2] = 240;
+      }
+
+    const speck = blob(0, 100, 60);
+    expect(reader.read(f, [speck], { ...permissive, budget: 1 })).toHaveLength(0);
+
+    // Someone lays a tile there: ink appears and the blob grows with it.
+    for (let y = 48; y < 72; y++)
+      for (let x = 92; x < 108; x++) {
+        const v = x < 96 || y < 52 ? 30 : 240;
+        f.gray[y * W + x] = v;
+        const i = (y * W + x) * 4;
+        f.rgba[i] = f.rgba[i + 1] = f.rgba[i + 2] = v;
+      }
+    const tile = blob(0, 100, 60);
+    tile.minX -= 4;
+    tile.maxX += 4;
+    tile.minY -= 4;
+    tile.maxY += 4;
+    tile.area = Math.round((tile.maxX - tile.minX + 1) * (tile.maxY - tile.minY + 1) * 0.5);
+    expect(reader.read(f, [tile], { ...permissive, budget: 1 })).toHaveLength(1);
+  });
+
   it("only reports readings it is confident about", () => {
     // The default thresholds exist so a game is told nothing rather than told
     // something wrong; a blank board must produce no letters.

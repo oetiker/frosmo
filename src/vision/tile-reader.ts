@@ -69,9 +69,39 @@ export interface ReaderOptions {
   rotationFallback?: boolean;
 }
 
-interface CacheEntry extends TileReading {
+interface CacheEntry {
+  /** null means "looked at this and it is not a character". */
+  reading: TileReading | null;
+  /** Blob size when the entry was made, so a changed blob can be re-read. */
+  side: number;
   lastSeen: number;
+  /** Frame after which a refusal is worth testing again. Unused for readings. */
+  recheck: number;
 }
+
+/**
+ * How long an entry survives without its blob being seen. Generous, because a
+ * tile briefly covered by a hand should not have to be read from scratch.
+ */
+const FORGET = 30;
+
+/**
+ * Refusals are cached too, and that is not an optimisation.
+ *
+ * A real sheet hands over far more junk than letters — border fragments, the
+ * rims of colour tokens, specks. Without this, every one of them costs a slot
+ * of the per-frame budget on every frame, forever, and the letters behind them
+ * are never reached at all. The board looks empty and the recogniser looks
+ * broken, when in fact it never got asked.
+ *
+ * But a refusal is a claim about a place, and places change: a tile can be laid
+ * down where a border fragment was. Two things reopen the question — the blob
+ * changing size by more than a hair, which is what happens when something is
+ * put down, and the plain passage of time, as a backstop for the case where it
+ * does not.
+ */
+const RECHECK_REFUSAL = 90;
+const SIDE_TOLERANCE = 0.12;
 
 export class TileReader {
   private cache = new Map<number, CacheEntry>();
@@ -106,14 +136,21 @@ export class TileReader {
       const hit = this.cache.get(key);
       if (hit) {
         hit.lastSeen = now;
-        hit.cx = blob.cx;
-        hit.cy = blob.cy;
-        out.push({ ...hit });
-        continue;
+        if (hit.reading) {
+          hit.reading.cx = blob.cx;
+          hit.reading.cy = blob.cy;
+          out.push({ ...hit.reading });
+          continue;
+        }
+        const grew = Math.abs(side - hit.side) > hit.side * SIDE_TOLERANCE;
+        if (!grew && now < hit.recheck) continue;
+        this.cache.delete(key);
       }
 
       if (budget <= 0) continue;
       budget--;
+      const refuse = () =>
+        this.cache.set(key, { reading: null, side, lastSeen: now, recheck: now + RECHECK_REFUSAL });
 
       if (!opts.source?.sample(blob.cx, blob.cy, side, 0, crop, CROP)) {
         sampleUpright(frame, blob.cx, blob.cy, side, crop, CROP);
@@ -129,7 +166,10 @@ export class TileReader {
       let ink = 0;
       for (let i = 0; i < normalised.length; i++) ink += normalised[i];
       const density = ink / normalised.length;
-      if (density < MIN_INK || density > MAX_INK) continue;
+      if (density < MIN_INK || density > MAX_INK) {
+        refuse();
+        continue;
+      }
 
       let result = readGlyph(normalised, opts.alphabet);
 
@@ -140,25 +180,27 @@ export class TileReader {
         }
       }
 
-      if (!result || result.confidence < minConfidence || result.margin < minMargin) continue;
+      // readGlyph returns null when the model's own reject class wins: not a
+      // weak letter, but a considered "that is not one of mine".
+      if (!result || result.confidence < minConfidence || result.margin < minMargin) {
+        refuse();
+        continue;
+      }
 
-      const entry: CacheEntry = {
+      const reading: TileReading = {
         char: result.char,
         score: result.confidence,
         margin: result.margin,
         cx: blob.cx,
         cy: blob.cy,
         size: side,
-        lastSeen: now,
       };
-      this.cache.set(key, entry);
-      out.push({ ...entry });
+      this.cache.set(key, { reading, side, lastSeen: now, recheck: 0 });
+      out.push({ ...reading });
     }
 
-    // Drop readings for tiles that have gone. Generous, because a tile briefly
-    // covered by a hand should not have to be read again from scratch.
     for (const [key, entry] of this.cache) {
-      if (now - entry.lastSeen > 30) this.cache.delete(key);
+      if (now - entry.lastSeen > FORGET) this.cache.delete(key);
     }
 
     return out;

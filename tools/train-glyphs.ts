@@ -40,7 +40,21 @@ const BASE = JSON.parse(readFileSync(".glyphs/base.json", "utf8")) as {
 };
 
 const CHARS = [...BASE.chars];
-const CLASSES = CHARS.length;
+/**
+ * One class beyond the alphabet: "this is not a character".
+ *
+ * Without it the net is forced to name every crop it is handed, and it does so
+ * confidently — a fragment of a tile's printed border reads as L at 1.00, the
+ * rim of a colour token reads as O. Nothing downstream can undo that, because
+ * the confidence is real: among 36 letters, a vertical bar genuinely is most
+ * like an L. The answer is to let it say none of them.
+ *
+ * The reject class is exempt from the alphabet restriction at inference — a
+ * game narrowing the answer to letters must not thereby lose the option of
+ * refusing.
+ */
+const REJECT = CHARS.length;
+const CLASSES = CHARS.length + 1;
 const INPUT = GLYPH_SIZE * GLYPH_SIZE;
 /** Matches the crop the tile detector takes: glyph plus surroundings. */
 const CROP = GLYPH_SIZE * 2;
@@ -136,6 +150,132 @@ function sample(ch: string): Uint8Array {
   return normaliseGlyph(crop, CROP, CROP);
 }
 
+/**
+ * One synthetic observation of something that is not a character.
+ *
+ * These are drawn from what the blob finder actually hands over on a real
+ * sheet, read off a capture from the rig: segments of the tiles' printed
+ * borders, the corners where two of them meet, whole rounded frames, the rims
+ * and bodies of colour tokens, and blank paper. Every one of those passes a
+ * shape filter — they are glyph-sized and glyph-shaped — so the filter cannot
+ * be what rejects them. The net has to.
+ */
+function negative(): Uint8Array {
+  const crop = new Uint8ClampedArray(CROP * CROP);
+  const paper = between(200, 250);
+  crop.fill(paper);
+  const ink = between(10, 90);
+
+  /** Distance from (x,y) to the segment (x0,y0)-(x1,y1). */
+  const distToSeg = (x: number, y: number, x0: number, y0: number, x1: number, y1: number) => {
+    const dx = x1 - x0, dy = y1 - y0;
+    const len = dx * dx + dy * dy;
+    const t = len ? Math.max(0, Math.min(1, ((x - x0) * dx + (y - y0) * dy) / len)) : 0;
+    const px = x0 + t * dx - x, py = y0 + t * dy - y;
+    return Math.sqrt(px * px + py * py);
+  };
+
+  /** A stroke crossing the whole crop at `a` radians, `off` to one side of centre. */
+  const bar = (a: number, thick: number, off: number) => {
+    const c = CROP / 2 + Math.cos(a + Math.PI / 2) * off;
+    const d = CROP / 2 + Math.sin(a + Math.PI / 2) * off;
+    const dx = Math.cos(a) * CROP, dy = Math.sin(a) * CROP;
+    return (x: number, y: number) => distToSeg(x, y, c - dx, d - dy, c + dx, d + dy) < thick;
+  };
+
+  /**
+   * An angle away from vertical — for the single-bar cases only.
+   *
+   * A lone upright stroke is an I, and no amount of training separates one from
+   * an upright piece of tile border: they are the same picture. Teaching the
+   * net to refuse it would cost every real I on the sheet, so the single bar is
+   * drawn slanted or flat, where no letterform competes for it.
+   */
+  const slanted = () => {
+    const a = between(0.5, Math.PI - 0.5);
+    return Math.abs(a - Math.PI / 2) < 0.5 ? (a < Math.PI / 2 ? a - 1 : a + 1) : a;
+  };
+
+  const kind = Math.floor(rnd() * 9);
+  let inside: (x: number, y: number) => boolean;
+
+  if (kind === 0) {
+    // Blank paper. The tile reader guards on ink density too, but a model that
+    // has never seen emptiness will not be the one to catch what slips past.
+    inside = () => false;
+  } else if (kind === 1) {
+    inside = bar(slanted(), between(1, 3.4), between(-0.3, 0.3) * CROP);
+  } else if (kind === 2) {
+    // Two strokes meeting: the corner of a printed tile.
+    const a = bar(slanted(), between(1, 3), between(-0.3, 0.3) * CROP);
+    const b = bar(slanted(), between(1, 3), between(-0.3, 0.3) * CROP);
+    inside = (x, y) => a(x, y) || b(x, y);
+  } else if (kind === 6 || kind === 7) {
+    // Two near-parallel strokes with a gap between them: the facing edges of
+    // two tiles sitting side by side. On the app's own printout this is by some
+    // way the commonest thing the blob finder hands over — and unlike a single
+    // upright stroke it is not any letter, so it can be refused outright.
+    const a = between(0, Math.PI);
+    const gap = between(0.12, 0.45) * CROP;
+    const thick = between(1, 3);
+    const centre = between(-0.12, 0.12) * CROP;
+    const one = bar(a, thick, centre - gap / 2);
+    const two = bar(a + between(-0.09, 0.09), thick, centre + gap / 2);
+    inside = (x, y) => one(x, y) || two(x, y);
+  } else if (kind === 3) {
+    // A rounded rectangle, drawn as an outline and usually running off the
+    // crop: the tiles on the app's own printout are exactly this. A crop that
+    // catches only one corner of it is an L, which is a real letter — the two
+    // are told apart by weight, so every structural line here is drawn thinner
+    // than a glyph stroke at the same scale ever gets. That is true of the
+    // printout as well: the borders are hairlines and the letters are bold.
+    const w = between(0.5, 1.4) * CROP, h = between(0.5, 1.4) * CROP;
+    const cx = CROP / 2 + between(-0.3, 0.3) * CROP;
+    const cy = CROP / 2 + between(-0.3, 0.3) * CROP;
+    const thick = between(1, 2.8);
+    inside = (x, y) => {
+      const dx = Math.abs(x - cx) - w / 2, dy = Math.abs(y - cy) - h / 2;
+      const d = Math.max(dx, dy);
+      return d > -thick && d < thick;
+    };
+  } else if (kind === 4) {
+    // A filled ellipse: a colour token, or a thumb.
+    const cx = CROP / 2 + between(-0.25, 0.25) * CROP;
+    const cy = CROP / 2 + between(-0.25, 0.25) * CROP;
+    const rx = between(0.25, 0.7) * CROP, ry = between(0.25, 0.7) * CROP;
+    inside = (x, y) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 < 1;
+  } else if (kind === 5) {
+    // The rim of one. This is the shape that reads as O, C or D.
+    const cx = CROP / 2 + between(-0.4, 0.4) * CROP;
+    const cy = CROP / 2 + between(-0.4, 0.4) * CROP;
+    const r = between(0.3, 0.9) * CROP;
+    const thick = between(1.5, 5);
+    inside = (x, y) => Math.abs(Math.hypot(x - cx, y - cy) - r) < thick;
+  } else {
+    // Speckle: dust, print noise, a shadow edge broken into pieces.
+    const spots: [number, number, number][] = [];
+    for (let i = 0, n = 3 + Math.floor(rnd() * 8); i < n; i++)
+      spots.push([rnd() * CROP, rnd() * CROP, between(1.5, 5)]);
+    inside = (x, y) => spots.some(([sx, sy, r]) => Math.hypot(x - sx, y - sy) < r);
+  }
+
+  for (let y = 0; y < CROP; y++)
+    for (let x = 0; x < CROP; x++)
+      if (inside(x, y)) crop[y * CROP + x] = ink;
+
+  // Same camera as the characters get, so the net cannot separate the classes
+  // on image quality instead of on shape.
+  const blur = between(0, 1.7);
+  const contrast = between(0.55, 1.25);
+  const bright = between(-35, 25);
+  const noise = between(0, 16);
+  for (let i = 0; i < CROP * CROP; i++)
+    crop[i] = (crop[i] - 128) * contrast + 128 + bright + gauss() * noise;
+  if (blur > 0.2) boxBlur(crop, CROP, Math.round(blur));
+
+  return normaliseGlyph(crop, CROP, CROP);
+}
+
 function bilinear(src: number[], n: number, x: number, y: number): number {
   if (x < 0 || y < 0 || x > n - 1 || y > n - 1) return 255;
   const x0 = Math.floor(x);
@@ -172,17 +312,30 @@ function boxBlur(buf: Uint8ClampedArray, n: number, r: number): void {
   }
 }
 
+/**
+ * Reject covers seven shape families against one letterform each, so it gets a
+ * proportionally larger share — at parity it is the thinnest-sampled class in
+ * the set and the net under-fits exactly the thing it is there to catch.
+ */
+const REJECT_SHARE = 4;
+
 function buildSet(perClass: number): { x: Uint8Array; y: Int32Array } {
-  const count = perClass * CLASSES;
+  const rejects = perClass * REJECT_SHARE;
+  const count = perClass * CHARS.length + rejects;
   const x = new Uint8Array(count * INPUT);
   const y = new Int32Array(count);
   let i = 0;
-  for (let c = 0; c < CLASSES; c++) {
+  for (let c = 0; c < CHARS.length; c++) {
     for (let k = 0; k < perClass; k++) {
       x.set(sample(CHARS[c]), i * INPUT);
       y[i] = c;
       i++;
     }
+  }
+  for (let k = 0; k < rejects; k++) {
+    x.set(negative(), i * INPUT);
+    y[i] = REJECT;
+    i++;
   }
   return { x, y };
 }
@@ -448,19 +601,23 @@ function accuracy(
   set: { x: Uint8Array; y: Int32Array },
   allowed?: string,
 ): { acc: number; worst: Array<[string, string, number]> } {
-  const mask = allowed ? CHARS.map((c) => allowed.includes(c)) : CHARS.map(() => true);
+  // Reject is always allowed: a game that narrows the answer to letters is
+  // saying which letters it might see, not promising that it will see one.
+  const mask = CHARS.map((c) => !allowed || allowed.includes(c));
+  mask[REJECT] = true;
+  const name = (c: number) => (c === REJECT ? "·" : CHARS[c]);
   const confusion = new Map<string, number>();
   let right = 0;
   let counted = 0;
   for (let i = 0; i < set.y.length; i++) {
-    if (!mask[set.y[i]]) continue;
+    if (!mask[set.y[i]] || (allowed && set.y[i] === REJECT)) continue;
     counted++;
     forward(set.x, i * INPUT);
     let best = -1;
     for (let c = 0; c < CLASSES; c++) if (mask[c] && (best < 0 || probs[c] > probs[best])) best = c;
     if (best === set.y[i]) right++;
     else {
-      const key = `${CHARS[set.y[i]]}>${CHARS[best]}`;
+      const key = `${name(set.y[i])}>${name(best)}`;
       confusion.set(key, (confusion.get(key) ?? 0) + 1);
     }
   }
@@ -532,6 +689,32 @@ console.log(`  letters only        ${(letters.acc * 100).toFixed(2)}%   ← what
 console.log(`  digits only         ${(digits.acc * 100).toFixed(2)}%`);
 console.log("\nworst confusions, letters:", letters.worst.map(([a, b, n]) => `${a}→${b} ×${n}`).join("  ") || "none");
 
+/**
+ * The two numbers the accuracy table hides, measured under play conditions —
+ * letters allowed, reject allowed. Catching junk is only half of it: a model
+ * that rejects everything scores perfectly on the first number and is useless.
+ */
+function rejection(set: { x: Uint8Array; y: Int32Array }): { caught: number; falsely: number } {
+  const mask = CHARS.map((c) => LETTERS.includes(c));
+  mask[REJECT] = true;
+  let junk = 0, junkCaught = 0, real = 0, realRejected = 0;
+  for (let i = 0; i < set.y.length; i++) {
+    const truth = set.y[i];
+    if (truth !== REJECT && !mask[truth]) continue;
+    forward(set.x, i * INPUT);
+    let best = -1;
+    for (let c = 0; c < CLASSES; c++) if (mask[c] && (best < 0 || probs[c] > probs[best])) best = c;
+    if (truth === REJECT) { junk++; if (best === REJECT) junkCaught++; }
+    else { real++; if (best === REJECT) realRejected++; }
+  }
+  return { caught: junk ? junkCaught / junk : 0, falsely: real ? realRejected / real : 0 };
+}
+
+const rej = rejection(val);
+console.log(`\nreject class`);
+console.log(`  junk refused        ${(rej.caught * 100).toFixed(2)}%   ← borders, token rims, blank paper`);
+console.log(`  letters refused     ${(rej.falsely * 100).toFixed(2)}%   ← the cost of it`);
+
 // ---------------------------------------------------------------- save
 
 /** Quantise to int8 with one scale per tensor: a quarter of the size, no measurable loss. */
@@ -543,13 +726,21 @@ function quantise(w: Float32Array): { scale: number; data: number[] } {
 }
 
 const model = {
-  version: 2,
+  version: 3,
   kind: "cnn",
   chars: BASE.chars,
+  /** The FC layer has one row past `chars`: "none of these". See glyph-net.ts. */
+  reject: true,
   input: GLYPH_SIZE,
   c1: C1,
   c2: C2,
-  accuracy: { all: Number(all.acc.toFixed(4)), letters: Number(letters.acc.toFixed(4)), digits: Number(digits.acc.toFixed(4)) },
+  accuracy: {
+    all: Number(all.acc.toFixed(4)),
+    letters: Number(letters.acc.toFixed(4)),
+    digits: Number(digits.acc.toFixed(4)),
+    junkRefused: Number(rej.caught.toFixed(4)),
+    lettersRefused: Number(rej.falsely.toFixed(4)),
+  },
   k1: quantise(k1),
   kb1: Array.from(kb1, (v) => Number(v.toFixed(5))),
   k2: quantise(k2),

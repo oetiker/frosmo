@@ -137,17 +137,22 @@ npm run glyphs:train    # trains, checks gradients, writes src/vision/glyph-mode
 Two things do most of the work at play time. A game says which characters can
 possibly appear — Spell It only ever wants letters — and that restriction is
 applied to the scores *before* the winner is picked, not as a filter afterwards,
-so `D` can never lose to `0`. And each glyph is read once and then cached
-against its position, because a tile that has not moved cannot have changed
-its mind; only a handful of new glyphs are put through the net per frame, which
-is what keeps it inside the frame budget.
+so `D` can never lose to `0`.
+
+And each glyph is read once and then cached against its position, because a tile
+that has not moved cannot have changed its mind. Refusals are cached the same
+way, and that is not an optimisation — junk outnumbers letters on a real sheet
+two to one, so without it the per-frame budget is spent entirely on rejecting
+the same fragments over and over and the letters behind them are never reached
+at all. A refusal is reopened when its blob changes size, which is what happens
+when something is actually put down there.
 
 ## Development
 
 ```sh
 npm install
 npm run dev          # http://localhost:5173 — camera works on localhost
-npm test             # 175 unit tests, no browser needed
+npm test             # unit tests, no browser needed
 npm run typecheck
 npm run build        # static dist/, plus a service worker built from it
 ```

@@ -32,6 +32,15 @@ function dequantise(q: Quantised): Float32Array {
 }
 
 const CHARS = [...model.chars];
+/**
+ * Models from version 3 on carry one class past the alphabet: "none of these".
+ * It exists because the alternative is worse than being wrong — handed a
+ * fragment of a printed border, a 36-way net answers L at full confidence, and
+ * nothing downstream can tell that apart from a real L. Older models simply
+ * never refuse.
+ */
+const REJECT = (model as { reject?: boolean }).reject === true ? CHARS.length : -1;
+const CLASSES = CHARS.length + (REJECT >= 0 ? 1 : 0);
 const S = model.input;
 const S2 = S / 2;
 const S4 = S / 4;
@@ -52,7 +61,7 @@ const z1 = new Float32Array(C1 * S * S);
 const p1 = new Float32Array(C1 * S2 * S2);
 const z2 = new Float32Array(C2 * S2 * S2);
 const p2 = new Float32Array(POOLED);
-const scores = new Float32Array(CHARS.length);
+const scores = new Float32Array(CLASSES);
 
 export interface NetResult {
   char: string;
@@ -132,8 +141,10 @@ export function readGlyph(sample: Uint8Array, allowed?: string): NetResult | nul
   pool(z2, C2, S2, p2);
 
   let max = -Infinity;
-  for (let c = 0; c < CHARS.length; c++) {
-    if (allowed && !allowed.includes(CHARS[c])) {
+  for (let c = 0; c < CLASSES; c++) {
+    // Reject is never masked. A game narrowing the answer to letters is saying
+    // which letters it might see, not promising that what it is shown is one.
+    if (c !== REJECT && allowed && !allowed.includes(CHARS[c])) {
       scores[c] = -Infinity;
       continue;
     }
@@ -146,14 +157,14 @@ export function readGlyph(sample: Uint8Array, allowed?: string): NetResult | nul
   if (max === -Infinity) return null;
 
   let sum = 0;
-  for (let c = 0; c < CHARS.length; c++) {
+  for (let c = 0; c < CLASSES; c++) {
     scores[c] = scores[c] === -Infinity ? 0 : Math.exp(scores[c] - max);
     sum += scores[c];
   }
 
   let best = 0;
   let second = -1;
-  for (let c = 0; c < CHARS.length; c++) {
+  for (let c = 0; c < CLASSES; c++) {
     if (scores[c] > scores[best]) {
       second = best;
       best = c;
@@ -162,7 +173,13 @@ export function readGlyph(sample: Uint8Array, allowed?: string): NetResult | nul
     }
   }
 
+  // "Not a character" is an answer, not a low-confidence one: returning it as a
+  // weak reading would leave the caller to re-derive what the net already knows.
+  if (best === REJECT) return null;
+
   const top = scores[best] / sum;
+  // If reject was the runner-up the margin should shrink, not vanish: the net
+  // nearly refused, and the caller is entitled to see that in the number.
   const runnerUp = second >= 0 ? scores[second] / sum : 0;
   return { char: CHARS[best], confidence: top, margin: top - runnerUp };
 }

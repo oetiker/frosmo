@@ -4,11 +4,15 @@
  * Nobody should have to buy anything to try this. A sheet of paper, scissors
  * and five minutes gives a full set of letter tiles and colour tokens.
  *
- * The letter tiles are set in the same typeface the glyph atlas is rendered in,
- * so tiles printed here are matched against templates with identical
- * letterforms — recognition of these is as good as this pipeline gets, and
- * everything else (Osmo's own tiles, Scrabble, handwriting) degrades from
- * there.
+ * The letter tiles are set in the typeface the recogniser was trained on, so
+ * tiles printed here are the letterforms it knows best — recognition of these
+ * is as good as this pipeline gets, and everything else (Osmo's own tiles,
+ * Scrabble, handwriting) degrades from there.
+ *
+ * The border is deliberately a quarter the weight of a glyph stroke. It is a
+ * cut line, but the camera sees it too, and once it is broken into fragments by
+ * the mask it is glyph-sized and glyph-shaped; weight is the one cue that still
+ * separates it from a letter, so it is worth keeping the difference wide.
  */
 
 import { DEFAULT_DIGITS, DEFAULT_LETTERS, GLYPH_FONT_STACK } from "../../vision/glyph.js";
