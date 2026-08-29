@@ -184,7 +184,14 @@ export class OccupancyDetector {
     const pixels = gray.length;
 
     const gain = normaliseExposure
-      ? estimateGain(rgba, this.bgRgb, pixels, { scratch: this.gainScratch })
+      ? estimateGain(rgba, this.bgRgb, pixels, {
+          scratch: this.gainScratch,
+          // Pixels that already look changed are left out of the estimate.
+          // Without this a large uniform object — a sheet of paper on the
+          // table — is measured as an exposure change and quietly corrected
+          // away, taking everything printed on it along with it.
+          exclude: { refGray: this.bgGray, limits: this.limits, previous: this.lastGain },
+        })
       : { ...IDENTITY_GAIN };
     this.lastGain = gain;
 

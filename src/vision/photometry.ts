@@ -9,14 +9,36 @@
  * comparison between two pictures taken under different exposures.
  *
  * So before any pixel is compared, the current frame is scaled back onto the
- * reference's exposure. One gain per channel handles both effects: exposure
- * moves all three together, white balance moves them apart.
+ * reference's exposure.
  *
- * The estimate has to survive a table with things on it, which is the whole
- * point, so it uses medians rather than means. A median is unmoved until more
- * than half the sampled pixels change — and the play area is rarely more than
- * half covered. A mean would be dragged by the first dark object placed, which
- * is exactly the case this exists to handle.
+ * The estimate has to survive a table with things on it — that is the whole
+ * point — including the most natural thing anyone does, which is to put a sheet
+ * of paper down. A sheet covers most of the play area, so more than half the
+ * pixels change at once, and any estimator built on a median or a mean then
+ * describes the sheet rather than the table: it "corrects away" the very object
+ * it is supposed to help detect, and dims everything on top of it in the
+ * process. That was not a hypothetical; it is what a real capture showed.
+ *
+ * So the estimate is the **mode** of the per-pixel ratios, not their median.
+ * Background pixels all agree on exactly one ratio — the camera's own gain —
+ * and pile into one narrow peak, while pixels covered by clutter scatter. The
+ * peak therefore wins even when the background is a minority of the frame,
+ * which is a property a median cannot have at any threshold.
+ *
+ * That is still not enough on its own, and it is worth being precise about
+ * why. A *uniform* object — a sheet of white paper — does not scatter: it
+ * forms its own sharp peak, a bigger one if it covers more of the board. On a
+ * perfectly flat table the two readings are not merely hard to separate, they
+ * are the same image: "the table got brighter" and "something bright was put
+ * on the table" are indistinguishable from one frame of pixels alone.
+ *
+ * The tie-break therefore comes from outside the photometry: pixels that the
+ * detector *already believes* have changed are excluded from the estimate. The
+ * previous frame's gain is close enough to mark a newly placed sheet as
+ * changed, the gain is then measured on the table that remains, and the sheet
+ * stays visible. When too little is left to measure — a genuine exposure step
+ * changes everything at once — the estimate falls back to using the whole
+ * frame, which is the case the mode already handles.
  */
 
 export interface Gain {
@@ -47,17 +69,29 @@ export interface GainOptions {
   min?: number;
   max?: number;
   /**
-   * Channels whose reference median is darker than this are left uncorrected.
-   * A ratio between two near-black values is noise amplified, not a gain.
+   * Samples darker than this, on either side, contribute nothing. A ratio
+   * between two near-black values is amplified noise, not a gain.
    */
   floor?: number;
-  /** Reusable histograms, six of them, so the per-frame path allocates nothing. */
+  /** Reusable histograms, so the per-frame path allocates nothing. */
   scratch?: Int32Array[];
+  /**
+   * The detector's learned luma, its per-pixel thresholds, and the gain used
+   * last frame. Given all three, samples that already look changed are left out
+   * of the estimate, which is what stops a large uniform object from being
+   * measured as an exposure change. Omit them and the estimate uses every
+   * sample.
+   */
+  exclude?: {
+    refGray: Float32Array;
+    limits: Float32Array;
+    previous: Gain;
+  };
 }
 
-/** Six 256-bin histograms: current and reference, three channels each. */
+/** One ratio histogram per channel. */
 export function createGainScratch(): Int32Array[] {
-  return Array.from({ length: 6 }, () => new Int32Array(256));
+  return Array.from({ length: 3 }, () => new Int32Array(BINS));
 }
 
 /**
@@ -72,64 +106,104 @@ export function estimateGain(
   pixels: number,
   opts: GainOptions = {},
 ): Gain {
-  // One sample in six is plenty for a median: the estimate is a summary
-  // statistic over tens of thousands of pixels, and halving the sample count
-  // moves it by far less than the noise it is measuring.
   const stride = Math.max(1, opts.stride ?? 6);
   const min = opts.min ?? 0.4;
   const max = opts.max ?? 2.5;
   const floor = opts.floor ?? 8;
 
   const hist = opts.scratch ?? createGainScratch();
-  for (const h of hist) h.fill(0);
-  const curHist = hist;
-  const refHist = [hist[3], hist[4], hist[5]];
-  let n = 0;
-
+  const scale = BINS / (max - min);
   const wanted = Math.max(1, Math.floor(pixels / stride));
-  for (let k = 0; k < wanted; k++) {
-    const i = (k * WALK) % pixels;
-    const c = i * 4;
-    const r = i * 3;
-    curHist[0][current[c]]++;
-    curHist[1][current[c + 1]]++;
-    curHist[2][current[c + 2]]++;
-    // Rounded and clamped inline: Math.round is a call, and this runs six
-    // times per sample on the per-frame path.
-    let v = (reference[r] + 0.5) | 0;
-    refHist[0][v < 0 ? 0 : v > 255 ? 255 : v]++;
-    v = (reference[r + 1] + 0.5) | 0;
-    refHist[1][v < 0 ? 0 : v > 255 ? 255 : v]++;
-    v = (reference[r + 2] + 0.5) | 0;
-    refHist[2][v < 0 ? 0 : v > 255 ? 255 : v]++;
-    n++;
-  }
+  const counted = [0, 0, 0];
 
-  if (n === 0) return { ...IDENTITY_GAIN };
+  const gather = (skipChanged: boolean) => {
+    for (const h of hist) h.fill(0);
+    counted[0] = counted[1] = counted[2] = 0;
+
+    const ex = skipChanged ? opts.exclude : undefined;
+    const kr = ex ? (ex.previous.r * 77) / 256 : 0;
+    const kg = ex ? (ex.previous.g * 150) / 256 : 0;
+    const kb = ex ? (ex.previous.b * 29) / 256 : 0;
+
+    for (let k = 0; k < wanted; k++) {
+      const i = (k * WALK) % pixels;
+      const c = i * 4;
+
+      if (ex) {
+        const luma = current[c] * kr + current[c + 1] * kg + current[c + 2] * kb;
+        const diff = luma - ex.refGray[i];
+        if ((diff < 0 ? -diff : diff) > ex.limits[i]) continue;
+      }
+
+      const r = i * 3;
+      for (let ch = 0; ch < 3; ch++) {
+        const ref = reference[r + ch];
+        const cur = current[c + ch];
+        // A ratio between two near-black values is amplified noise, not a gain.
+        if (ref < floor || cur < floor) continue;
+        const ratio = ref / cur;
+        if (ratio < min || ratio >= max) continue;
+        hist[ch][((ratio - min) * scale) | 0]++;
+        counted[ch]++;
+      }
+    }
+  };
+
+  gather(true);
+  // Too little of the board still resembles the reference to measure against.
+  // That is what a genuine exposure step looks like, so measure the whole frame
+  // and let the mode pick out the population that agrees.
+  if (opts.exclude && counted[1] < wanted * 0.1) gather(false);
 
   const gains: number[] = [];
   for (let ch = 0; ch < 3; ch++) {
-    const cur = median(curHist[ch], n);
-    const ref = median(refHist[ch], n);
-    if (cur < floor || ref < floor) {
-      gains.push(1);
-      continue;
-    }
-    gains.push(Math.min(max, Math.max(min, ref / cur)));
+    gains.push(mode(hist[ch], counted[ch], min, max));
   }
 
   return { r: gains[0], g: gains[1], b: gains[2] };
 }
 
-/** Median from a histogram, without materialising the samples. */
-function median(hist: Int32Array, n: number): number {
-  const half = n / 2;
-  let seen = 0;
-  for (let v = 0; v < 256; v++) {
-    seen += hist[v];
-    if (seen >= half) return v;
+/** Bins across the permitted ratio range; ~1.6% resolution at unity gain. */
+const BINS = 128;
+
+/**
+ * The ratio the most pixels agree on.
+ *
+ * The peak is found over three adjacent bins rather than one, so a peak that
+ * straddles a bin boundary is not split in half and beaten by a lesser one, and
+ * the result is interpolated across those same three bins to recover a value
+ * finer than the bin width.
+ *
+ * A peak that is not meaningfully taller than the background chatter means
+ * there was no agreeing population to find — nothing recognisable as the table
+ * is in view — and unity is the honest answer.
+ */
+function mode(hist: Int32Array, samples: number, min: number, max: number): number {
+  if (samples < 64) return 1;
+
+  let bestBin = -1;
+  let bestWeight = 0;
+  for (let b = 0; b < BINS; b++) {
+    const weight =
+      (b > 0 ? hist[b - 1] : 0) + hist[b] + (b < BINS - 1 ? hist[b + 1] : 0);
+    if (weight > bestWeight) {
+      bestWeight = weight;
+      bestBin = b;
+    }
   }
-  return 255;
+
+  // Three bins out of 128 holding less than a twentieth of the samples is a
+  // flat distribution, not a peak.
+  if (bestBin < 0 || bestWeight < samples * 0.05) return 1;
+
+  const lo = bestBin > 0 ? hist[bestBin - 1] : 0;
+  const mid = hist[bestBin];
+  const hi = bestBin < BINS - 1 ? hist[bestBin + 1] : 0;
+  const total = lo + mid + hi;
+  const centroid = total > 0 ? bestBin + (hi - lo) / total : bestBin;
+
+  const width = (max - min) / BINS;
+  return min + (centroid + 0.5) * width;
 }
 
 /** How far a gain is from doing nothing — the number the vision lab reports. */

@@ -17,7 +17,7 @@ import type { App, Screen } from "../app.js";
 
 const TOKEN_COLORS = [
   ["Red", "#d93025"],
-  ["Yellow", "#f2b705"],
+  ["Orange", "#f2b705"],
   ["Green", "#1e9e4a"],
   ["Blue", "#1a63d8"],
 ];

@@ -7,6 +7,7 @@
 
 import type { Blob } from "./blobs.js";
 import { GLYPH_SIZE, matchGlyph, normaliseGlyph, type GlyphAtlas, type GlyphMatch } from "./glyph.js";
+import type { CropSource } from "./native-crop.js";
 import type { RectifiedFrame } from "./rectify.js";
 
 export interface Tile extends GlyphMatch {
@@ -35,6 +36,15 @@ export interface TileOptions {
   minMargin?: number;
   /** Reject matches whose absolute agreement is below this. */
   minScore?: number;
+  /**
+   * Where to take the glyph crop from.
+   *
+   * Given one, crops come from the camera at native resolution, which is the
+   * difference between a readable letter and ten pixels of mush. Without one,
+   * the board buffer is used — enough for the tests, and the honest fallback
+   * when there is no video to sample.
+   */
+  source?: CropSource;
 }
 
 /** Oversampling factor for the crop, so normalisation has detail to work with. */
@@ -69,7 +79,10 @@ export function detectTiles(
     // Beyond that a square tile is indistinguishable from itself, and the four
     // quarter turns are handled by the matcher.
     const side = Math.sqrt(blob.area) * 1.05;
-    sampleUpright(frame, blob.cx, blob.cy, side, foldAngle(blob.angle), crop, CROP);
+    const angle = foldAngle(blob.angle);
+    if (!opts.source?.sample(blob.cx, blob.cy, side, angle, crop, CROP)) {
+      sampleUpright(frame, blob.cx, blob.cy, side, angle, crop, CROP);
+    }
 
     const match = matchGlyph(normaliseGlyph(crop, CROP, CROP), atlas);
     if (!match || match.score < minScore || match.margin < minMargin) continue;

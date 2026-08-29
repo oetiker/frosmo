@@ -11,8 +11,16 @@ import { COLOR_SWATCH, type TokenColor } from "../vision/color.js";
 import { Stabiliser } from "../vision/stability.js";
 import type { GameDef, GameEnv, GameHud, GameInstance } from "./types.js";
 
-/** Colours a domestic toy box actually contains, and that survive a cheap mirror. */
-const PALETTE: TokenColor[] = ["red", "yellow", "green", "blue"];
+/**
+ * Colours a domestic toy box actually contains, and that survive a camera.
+ *
+ * Orange rather than yellow, because that is what the printed sheet's amber
+ * ink photographs as — measured at 28 degrees on a real iPad, comfortably
+ * inside the orange bucket. Asking for "yellow" meant every one of those
+ * tokens was classified correctly as orange and then silently discarded for
+ * not being on this list.
+ */
+const PALETTE: TokenColor[] = ["red", "orange", "green", "blue"];
 const ROUND_SECONDS = 90;
 const HOLD_SECONDS = 0.7;
 /** Below this the classifier is sitting between two hues; ignore rather than guess. */
@@ -182,10 +190,10 @@ export const colorRush: GameDef = {
   title: "Colour Rush",
   tagline: "Match the colours before the clock runs out",
   emoji: "🎨",
-  needs: { occupancy: true, tokens: true },
+  needs: { occupancy: true, tokens: true, palette: PALETTE },
   materials: [
     "A pile of coloured things: bricks, bottle caps, counters",
-    "Red, yellow, green and blue work best",
+    "Red, orange, green and blue work best",
   ],
   how: [
     "The screen asks for a set of colours.",

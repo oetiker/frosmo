@@ -72,11 +72,14 @@ describe("estimateGain", () => {
     expect(gain.r).toBeCloseTo(1.25, 1);
   });
 
-  it("clamps rather than exploding on a pathological frame", () => {
+  it("declines to guess when nothing in view resembles the reference", () => {
+    // A ratio outside the permitted range is not a plausible exposure
+    // excursion: it means the scene changed, the lights went out, or the
+    // reference is stale. Half-correcting that produces a confidently wrong
+    // mask; unity plus the detector's own "this board looks wrong" is honest.
     const black = frame(() => [1, 1, 1]);
     const gain = estimateGain(black, reference(() => [250, 250, 250]), PIXELS, { floor: 0 });
-    expect(gain.r).toBeLessThanOrEqual(2.5);
-    expect(gain.r).toBeGreaterThan(1);
+    expect(gain).toEqual({ r: 1, g: 1, b: 1 });
   });
 
   it("leaves near-black channels alone", () => {
@@ -86,10 +89,82 @@ describe("estimateGain", () => {
     expect(gain.g).not.toBe(1);
   });
 
-  it("honours the clamp options", () => {
+  it("honours the range it is given", () => {
     const darker = frame(() => [90, 90, 90]);
-    const gain = estimateGain(darker, reference(() => [180, 180, 180]), PIXELS, { max: 1.5 });
-    expect(gain.r).toBe(1.5);
+    expect(estimateGain(darker, reference(() => [180, 180, 180]), PIXELS, { max: 1.5 })).toEqual({
+      r: 1,
+      g: 1,
+      b: 1,
+    });
+    // The same frame, with the range widened to admit it.
+    expect(
+      estimateGain(darker, reference(() => [180, 180, 180]), PIXELS, { max: 2.5 }).r,
+    ).toBeCloseTo(2, 1);
+  });
+
+  it("outvotes clutter, which scatters rather than agreeing", () => {
+    // Half the pixels are junk of every brightness — the ordinary case of
+    // things strewn on a table. They spread across every ratio; only the table
+    // agrees with itself, so the table decides.
+    let seed = 12345;
+    const mixed = frame((i) => {
+      if (i % 2 === 0) {
+        seed = (seed * 1664525 + 1013904223) >>> 0;
+        const v = (seed >>> 20) % 256;
+        return [v, v, v];
+      }
+      return TABLE.map((c) => Math.round(c * 0.8)) as [number, number, number];
+    });
+    expect(estimateGain(mixed, reference(() => TABLE), PIXELS).r).toBeCloseTo(1.25, 1);
+  });
+
+  describe("with a large uniform object in view", () => {
+    /**
+     * The case a real capture produced: a printed sheet covering most of the
+     * board. A uniform object does not scatter — it forms its own sharp peak,
+     * a taller one than the table it hides — so the mode alone picks the paper
+     * and corrects the sheet away. The detector's own thresholds break the tie.
+     */
+    const PAPER: [number, number, number] = [236, 234, 230];
+    const sheet = (exposure: number) =>
+      frame((i) =>
+        i % 10 < 7
+          ? (PAPER.map((c) => Math.round(c * exposure)) as [number, number, number])
+          : (TABLE.map((c) => Math.round(c * exposure)) as [number, number, number]),
+      );
+
+    const ref = reference(() => TABLE);
+    const refGray = new Float32Array(PIXELS).fill(
+      (TABLE[0] * 77 + TABLE[1] * 150 + TABLE[2] * 29) / 256,
+    );
+    const limits = new Float32Array(PIXELS).fill(16);
+
+    it("is fooled by the sheet with no help from the detector", () => {
+      // Documents why the exclusion exists, and fails loudly if it is dropped.
+      const gain = estimateGain(sheet(1), ref, PIXELS);
+      expect(gain.r).toBeLessThan(0.85);
+    });
+
+    it("measures the table the sheet has not covered", () => {
+      const gain = estimateGain(sheet(1), ref, PIXELS, {
+        exclude: { refGray, limits, previous: { r: 1, g: 1, b: 1 } },
+      });
+      expect(gain.r).toBeCloseTo(1, 1);
+    });
+
+    it("tracks the exposure drifting while the sheet stays put", () => {
+      // Auto-exposure ramps over many frames; it does not step. Each frame's
+      // estimate feeds the next, which is how the detector uses it.
+      let previous = { r: 1, g: 1, b: 1 };
+      for (let step = 1; step <= 10; step++) {
+        const exposure = 1 - step * 0.02;
+        previous = estimateGain(sheet(exposure), ref, PIXELS, {
+          exclude: { refGray, limits, previous },
+        });
+      }
+      // Down to 0.8 exposure, so the correction back up is 1/0.8.
+      expect(previous.r).toBeCloseTo(1.25, 1);
+    });
   });
 
   it("is identity for an empty frame", () => {

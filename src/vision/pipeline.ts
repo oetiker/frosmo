@@ -15,9 +15,11 @@ import { createLabelScratch, labelBlobs, type LabelScratch } from "./blobs.js";
 import type { Camera } from "./camera.js";
 import { boardSize, boardToCamera, type Calibration } from "./calibration.js";
 import { classifyColor, type TokenColor } from "./color.js";
+import { IDENTITY_GAIN } from "./photometry.js";
 import { simplify, traceContours, type Contour } from "./contour.js";
 import { buildAtlas, DEFAULT_DIGITS, DEFAULT_LETTERS, type GlyphAtlas } from "./glyph.js";
 import { InkDetector } from "./ink.js";
+import { VideoCropSource } from "./native-crop.js";
 import { blurToField, createMask, type Mask } from "./mask.js";
 import { OccupancyDetector } from "./occupancy.js";
 import { buildSampleTable, createRectifiedFrame, rectify, type BoardSize, type RectifiedFrame } from "./rectify.js";
@@ -36,6 +38,18 @@ export interface VisionNeeds {
   tokens?: boolean;
   /** Printed letter and digit tiles, read. */
   tiles?: boolean;
+  /**
+   * The colours this game actually uses.
+   *
+   * Not a filter applied afterwards — the classifier is restricted to these,
+   * which is a different and much stronger thing. Left open, every sample
+   * competes against all eight buckets, and neighbours steal the margin from
+   * the colours that matter: a printed green photographs at about 145 degrees,
+   * squarely between the green and cyan centres, and comes out correctly
+   * identified but too uncertain to trust. Naming the four colours in play
+   * removes the competition that was never real.
+   */
+  palette?: TokenColor[];
 }
 
 export interface Token {
@@ -99,6 +113,8 @@ export class VisionPipeline {
   private labelScratch: LabelScratch | null = null;
   private contourScratch: Uint8Array | null = null;
   private atlas: GlyphAtlas | null = null;
+  private cropSource: VideoCropSource | null = null;
+  private cropSourceFor = { w: 0, h: 0 };
   private needs: VisionNeeds = { occupancy: true };
   private learning = 0;
   private state: VisionState | null = null;
@@ -128,8 +144,10 @@ export class VisionPipeline {
       this.contourScratch = new Uint8Array((size.w + 1) * (size.h + 1));
       this.state = null;
     }
-    // Force the gather table to be rebuilt against the new corners.
+    // Force the gather table and the native crop source to be rebuilt against
+    // the new corners.
     this.tableFor = { w: 0, h: 0 };
+    this.cropSourceFor = { w: 0, h: 0 };
   }
 
   setNeeds(needs: VisionNeeds): void {
@@ -275,8 +293,18 @@ export class VisionPipeline {
       });
       blobs = result.blobs;
       if (this.needs.tokens) {
+        // Colour is judged after the exposure correction, not before: the
+        // whole point of that correction is that raw pixel values are a
+        // statement about the light as much as about the paint.
+        const gain = this.occupancy?.gain ?? IDENTITY_GAIN;
+        const palette = this.needs.palette;
         tokens = blobs.map((blob) => {
-          const match = classifyColor(blob.r, blob.g, blob.b);
+          const match = classifyColor(
+            Math.min(255, blob.r * gain.r),
+            Math.min(255, blob.g * gain.g),
+            Math.min(255, blob.b * gain.b),
+            palette ? { palette } : {},
+          );
           return {
             blob,
             color: match.color,
@@ -291,7 +319,9 @@ export class VisionPipeline {
     t.blobs = performance.now() - mark;
 
     mark = performance.now();
-    const tiles = this.needs.tiles ? detectTiles(frame, blobs, this.glyphAtlas()) : [];
+    const tiles = this.needs.tiles
+      ? detectTiles(frame, blobs, this.glyphAtlas(), { source: this.tileCropSource(cal) ?? undefined })
+      : [];
     t.tiles = performance.now() - mark;
 
     mark = performance.now();
@@ -318,6 +348,22 @@ export class VisionPipeline {
       ready: occupancy.calibrated,
     };
     return this.state;
+  }
+
+  /**
+   * A crop source bound to the camera's *native* resolution.
+   *
+   * Rebuilt when the video's dimensions change, which happens once at startup
+   * and again if the camera is switched — not per frame.
+   */
+  private tileCropSource(cal: Calibration): VideoCropSource | null {
+    const { w, h } = this.camera.size;
+    if (!w || !h) return null;
+    if (!this.cropSource || this.cropSourceFor.w !== w || this.cropSourceFor.h !== h) {
+      this.cropSource = new VideoCropSource(this.camera.element, boardToCamera(cal, w, h), this.board);
+      this.cropSourceFor = { w, h };
+    }
+    return this.cropSource;
   }
 
   latest(): VisionState | null {
