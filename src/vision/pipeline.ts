@@ -23,7 +23,7 @@ import { VideoCropSource } from "./native-crop.js";
 import { blurToField, createMask, type Mask } from "./mask.js";
 import { OccupancyDetector } from "./occupancy.js";
 import { buildSampleTable, createRectifiedFrame, rectify, type BoardSize, type RectifiedFrame } from "./rectify.js";
-import { detectTiles, type Tile } from "./tiles.js";
+import { detectTiles, glyphMinArea, type Tile } from "./tiles.js";
 
 export interface VisionNeeds {
   /** The covered-pixel mask. Nearly everything wants this. */
@@ -265,12 +265,14 @@ export class VisionPipeline {
     t.occupancy = performance.now() - mark;
 
     mark = performance.now();
-    if (this.needs.ink) inkDetector.detect(frame.gray);
+    // Tiles are read from ink, so asking for tiles asks for ink.
+    const wantInk = Boolean(this.needs.ink || this.needs.tiles);
+    if (wantInk) inkDetector.detect(frame.gray);
     t.ink = performance.now() - mark;
 
     // The union is what a ball bounces off: a drawn line and a wooden block are
     // the same obstacle as far as the physics is concerned.
-    if (this.needs.ink) {
+    if (wantInk) {
       const a = occupancy.mask.data;
       const b = inkDetector.mask.data;
       const s = solid.data;
@@ -284,7 +286,7 @@ export class VisionPipeline {
     mark = performance.now();
     let blobs: Blob[] = [];
     let tokens: Token[] = [];
-    if (this.needs.tokens || this.needs.tiles) {
+    if (this.needs.tokens) {
       const result = labelBlobs(occupancy.mask, {
         rgba: frame.rgba,
         minArea: Math.round(this.board.w * this.board.h * 0.0008),
@@ -319,8 +321,25 @@ export class VisionPipeline {
     t.blobs = performance.now() - mark;
 
     mark = performance.now();
+    // Glyphs are labelled from the ink mask, with their own minimum area.
+    //
+    // Not from occupancy, and not with the token minimum. A printed tile on a
+    // white sheet is not an object on the table — occupancy sees only the
+    // colour discs there, and handing those to the recogniser is why every tile
+    // used to read as "M". And the general blob minimum is tuned for tokens:
+    // several times too large for a letter, which would discard most of them
+    // before they were ever looked at.
     const tiles = this.needs.tiles
-      ? detectTiles(frame, blobs, this.glyphAtlas(), { source: this.tileCropSource(cal) ?? undefined })
+      ? detectTiles(
+          frame,
+          labelBlobs(inkDetector.mask, {
+            minArea: glyphMinArea(this.board.w, this.board.h),
+            limit: 96,
+            scratch: this.labelScratch ?? undefined,
+          }).blobs,
+          this.glyphAtlas(),
+          { source: this.tileCropSource(cal) ?? undefined },
+        )
       : [];
     t.tiles = performance.now() - mark;
 
