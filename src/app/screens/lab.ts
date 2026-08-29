@@ -10,7 +10,9 @@
  * milliseconds, and what the detectors currently believe is on the table.
  */
 
+import { captureDiagnostics, shareBundle } from "../diagnostics.js";
 import { COLOR_SWATCH } from "../../vision/color.js";
+import { describeGain } from "../../vision/photometry.js";
 import { describeCameraError, onVideoFrame } from "../../vision/camera.js";
 import type { Mask } from "../../vision/mask.js";
 import type { VisionState } from "../../vision/pipeline.js";
@@ -33,6 +35,7 @@ export function labScreen(): Screen {
       const timings = h("div", { class: "lab-timings" });
       const readout = h("div", { class: "lab-readout" });
       const status = h("div", { class: "cal-status" }, "Starting the camera…");
+      const controls = h("div", { class: "lab-controls" });
 
       root.append(
         h(
@@ -61,13 +64,73 @@ export function labScreen(): Screen {
             panel("Ink — adaptive threshold", ink),
             panel("Tokens and tiles", found),
           ),
-          h("div", { class: "lab-side" }, status, timings, readout),
+          h("div", { class: "lab-side" }, status, timings, readout, controls),
         ),
       );
 
       // The lab asks for everything, which is also the worst case for the
       // frame budget: if it holds up here it holds up in any game.
       app.pipeline.setNeeds({ occupancy: true, ink: true, field: true, contours: true, tokens: true, tiles: true });
+
+      /**
+       * Live controls for the occupancy thresholds.
+       *
+       * These are the numbers that decide whether the board works, and they can
+       * only be judged under a real mirror in a real room. Adjusting them here,
+       * on the device, with the mask visible next to them, takes seconds;
+       * guessing at them in a source file and redeploying takes a round trip
+       * for every guess.
+       */
+      const renderControls = () => {
+        const detector = app.pipeline.occupancyDetector;
+        controls.textContent = "";
+        if (!detector) return;
+        const settings = detector.settings();
+
+        const set = (patch: Parameters<typeof detector.configure>[0]) => {
+          detector.configure(patch);
+          renderControls();
+        };
+
+        controls.append(
+          toggle("Correct exposure", settings.normaliseExposure, (on) =>
+            set({ normaliseExposure: on }),
+          ),
+          toggle("Reject shadows", settings.rejectShadows, (on) => set({ rejectShadows: on })),
+          slider("Floor", settings.threshold, 2, 48, 1, (v) => set({ threshold: v })),
+          slider("Noise ×", settings.noiseFactor, 1, 8, 0.5, (v) => set({ noiseFactor: v })),
+          slider("Denoise", settings.denoise, 0, 3, 1, (v) => set({ denoise: v })),
+          h(
+            "button",
+            {
+              class: "primary",
+              onclick: () => {
+                void capture();
+              },
+            },
+            "Capture diagnostic",
+          ),
+        );
+      };
+
+      const capture = async () => {
+        const bundle = captureDiagnostics(app);
+        if (!bundle) {
+          status.textContent = "Nothing to capture yet — wait for the camera.";
+          return;
+        }
+        status.textContent = "Packaging…";
+        try {
+          const how = await shareBundle(bundle);
+          status.textContent =
+            how === "shared" ? "Shared." : "Saved to your downloads.";
+        } catch {
+          // A cancelled share sheet is not a failure worth shouting about.
+          status.textContent = "";
+        }
+      };
+
+      renderControls();
 
       void app
         .useCamera()
@@ -82,7 +145,7 @@ export function labScreen(): Screen {
             drawMaskCanvas(ink, state.ink, [235, 200, 120]);
             drawFound(found, state);
             renderTimings(timings, state);
-            renderReadout(readout, state);
+            renderReadout(readout, state, app);
           });
         })
         .catch((e) => {
@@ -98,6 +161,38 @@ export function labScreen(): Screen {
       owner = null;
     },
   };
+}
+
+function slider(
+  label: string,
+  value: number,
+  min: number,
+  max: number,
+  step: number,
+  onInput: (v: number) => void,
+): HTMLElement {
+  const input = h("input", {
+    type: "range",
+    min: String(min),
+    max: String(max),
+    step: String(step),
+    value: String(value),
+    oninput: (e: Event) => onInput(Number((e.target as HTMLInputElement).value)),
+  });
+  return h("label", { class: "lab-control" }, h("span", {}, `${label} ${value}`), input);
+}
+
+function toggle(label: string, on: boolean, onChange: (on: boolean) => void): HTMLElement {
+  return h(
+    "label",
+    { class: "lab-control" },
+    h("input", {
+      type: "checkbox",
+      checked: on,
+      onchange: (e: Event) => onChange((e.target as HTMLInputElement).checked),
+    }),
+    h("span", {}, label),
+  );
 }
 
 function panel(title: string, canvas: HTMLCanvasElement): HTMLElement {
@@ -182,8 +277,9 @@ function renderTimings(el: HTMLElement, state: VisionState): void {
   );
 }
 
-function renderReadout(el: HTMLElement, state: VisionState): void {
+function renderReadout(el: HTMLElement, state: VisionState, app: App): void {
   const pct = ((state.coveredPixels / (state.board.w * state.board.h)) * 100).toFixed(1);
+  const detector = app.pipeline.occupancyDetector;
   el.textContent = "";
   el.append(
     h("div", {}, `board ${state.board.w}×${state.board.h}`),
@@ -200,5 +296,16 @@ function renderReadout(el: HTMLElement, state: VisionState): void {
       `tiles ${state.tiles.map((t) => `${t.char}(${t.margin.toFixed(2)})`).join(" ") || "—"}`,
     ),
   );
+  if (detector) {
+    // The exposure the camera applied behind our backs. Near 1.00 means it is
+    // holding still; anything else means auto-exposure was about to be blamed
+    // for a detector's behaviour.
+    el.append(h("div", {}, `exposure ${describeGain(detector.gain)}`));
+    if (detector.suspect) {
+      el.append(
+        h("div", { class: "error" }, "board reads as covered — the reference is probably stale"),
+      );
+    }
+  }
   if (!state.ready) el.append(h("div", { class: "error" }, "empty board not learned yet"));
 }

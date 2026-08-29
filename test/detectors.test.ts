@@ -39,6 +39,28 @@ function withNoise(base: RectifiedFrame, amplitude: number, seed: number): Recti
   return f;
 }
 
+/** The same scene, as the camera would render it after changing exposure. */
+function exposed(base: RectifiedFrame, factor: number): RectifiedFrame {
+  return tinted(base, [factor, factor, factor]);
+}
+
+/** The same scene under a different white balance — e.g. screen light spilling in. */
+function tinted(base: RectifiedFrame, gains: [number, number, number]): RectifiedFrame {
+  const f = createRectifiedFrame({ w: W, h: H });
+  for (let i = 0; i < W * H; i++) {
+    const j = i * 4;
+    const r = Math.min(255, Math.round(base.rgba[j] * gains[0]));
+    const g = Math.min(255, Math.round(base.rgba[j + 1] * gains[1]));
+    const b = Math.min(255, Math.round(base.rgba[j + 2] * gains[2]));
+    f.rgba[j] = r;
+    f.rgba[j + 1] = g;
+    f.rgba[j + 2] = b;
+    f.rgba[j + 3] = 255;
+    f.gray[i] = (r * 77 + g * 150 + b * 29) >> 8;
+  }
+  return f;
+}
+
 describe("OccupancyDetector", () => {
   it("reports nothing before a reference has been taken", () => {
     const d = new OccupancyDetector(W, H);
@@ -82,6 +104,119 @@ describe("OccupancyDetector", () => {
 
     expect(d.mask.data[20 * W + 14]).toBe(1);
     expect(d.mask.data[20 * W + 42]).toBe(0);
+  });
+
+  describe("when the camera adjusts itself", () => {
+    /**
+     * The failure this whole mechanism exists for, seen on a real iPad: put
+     * something on the table, auto-exposure lifts the entire frame, and every
+     * pixel differs from the stored reference at once. The board reads as
+     * covered end to end and the games stop responding to anything.
+     */
+    const learned = (opts = {}) => {
+      const d = new OccupancyDetector(W, H, opts);
+      for (let i = 0; i < 10; i++) d.learn(emptyTable());
+      return d;
+    };
+
+    it("ignores an exposure change on an unchanged table", () => {
+      const d = learned();
+      expect(d.detect(exposed(emptyTable(), 1.25))).toBe(0);
+      expect(d.detect(exposed(emptyTable(), 0.8))).toBe(0);
+    });
+
+    it("reports the exposure it had to correct for", () => {
+      const d = learned();
+      d.detect(exposed(emptyTable(), 0.8));
+      // Near 1.00 means the camera is holding still; this is the number the
+      // vision lab shows so a real rig can be diagnosed rather than guessed at.
+      expect(d.gain.g).toBeGreaterThan(1.1);
+    });
+
+    it("would light the whole board up without the correction", () => {
+      // Not a curiosity: this documents why the option exists, and fails loudly
+      // if the correction is ever quietly disabled by default.
+      const d = learned({ normaliseExposure: false });
+      const covered = d.detect(exposed(emptyTable(), 1.25));
+      expect(covered / (W * H)).toBeGreaterThan(0.9);
+    });
+
+    it("still finds a real object through an exposure change", () => {
+      const d = learned();
+      const scene = frameOf((x, y) =>
+        x >= 20 && x < 32 && y >= 16 && y < 28 ? [30, 140, 60] : [180, 175, 168],
+      );
+      const covered = d.detect(exposed(scene, 1.2));
+      expect(covered).toBeGreaterThan(60);
+      expect(covered).toBeLessThan(260);
+      expect(d.mask.data[22 * W + 25]).toBe(1);
+      expect(d.mask.data[4 * W + 4]).toBe(0);
+    });
+
+    it("ignores a white balance shift", () => {
+      // A tablet's own screen is a blue-ish light source pointed at the table.
+      const d = learned();
+      expect(d.detect(tinted(emptyTable(), [0.9, 1, 1.15]))).toBe(0);
+    });
+  });
+
+  describe("per-pixel noise", () => {
+    it("demands more of a noisy region than a quiet one", () => {
+      // Under a mirror the image is dim and the noise is uneven across the
+      // frame; one global threshold has to be set for the worst part of it.
+      //
+      // The two patches are deliberately local and equal. A *uniform* lift
+      // would prove nothing here: a change that affects every pixel equally is
+      // an exposure change by definition, and the normaliser is supposed to
+      // remove it.
+      const d = new OccupancyDetector(W, H, { threshold: 8, noiseFactor: 4, denoise: 0 });
+      let seed = 7;
+      for (let i = 0; i < 12; i++) {
+        seed = (seed * 1664525 + 1013904223) >>> 0;
+        const n = ((seed >>> 16) % 21) - 10;
+        d.learn(
+          frameOf((x) => {
+            const v = x < W / 2 ? 150 + n : 150;
+            return [v, v, v];
+          }),
+        );
+      }
+
+      const patch = (x: number, y: number) =>
+        y >= 20 && y < 30 && ((x >= 8 && x < 18) || (x >= 46 && x < 56));
+      d.detect(
+        frameOf((x, y) => {
+          const v = patch(x, y) ? 162 : 150;
+          return [v, v, v];
+        }),
+      );
+
+      expect(d.mask.data[25 * W + 51]).toBe(1); // quiet half: 12 clears its threshold
+      expect(d.mask.data[25 * W + 13]).toBe(0); // noisy half: 12 is within its own noise
+    });
+  });
+
+  describe("suspect reference", () => {
+    it("says so when the board has read as covered for long enough", () => {
+      const d = new OccupancyDetector(W, H, { normaliseExposure: false });
+      for (let i = 0; i < 8; i++) d.learn(emptyTable());
+      expect(d.suspect).toBe(false);
+
+      const wrong = frameOf(() => [20, 20, 20]);
+      for (let i = 0; i < 60; i++) d.detect(wrong);
+      // The reference, not the table, is the likely problem — and a player
+      // staring at a game that ignores them deserves to be told.
+      expect(d.suspect).toBe(true);
+      expect(d.coveredFraction).toBeGreaterThan(0.9);
+    });
+
+    it("clears as soon as the board looks normal again", () => {
+      const d = new OccupancyDetector(W, H, { normaliseExposure: false });
+      for (let i = 0; i < 8; i++) d.learn(emptyTable());
+      for (let i = 0; i < 60; i++) d.detect(frameOf(() => [20, 20, 20]));
+      d.detect(emptyTable());
+      expect(d.suspect).toBe(false);
+    });
   });
 
   it("forgets on demand", () => {

@@ -133,22 +133,49 @@ async function main() {
     }, { timeout: 15000 });
     check("camera starts and the pipeline runs", true);
 
-    // The clip alternates an empty table with pieces on it. Learning has to
-    // happen during the empty stretch, so retry: a run that learns the pieces
-    // into the background simply finds nothing and tries again.
+    // The clip alternates an empty table with pieces on it, so the phase has
+    // to be observed rather than guessed at. Reading the rectified board where
+    // the red piece will appear says which phase is on screen: the reference
+    // must be learned while the table is empty, and the assertions must run
+    // while the pieces are there.
+    //
+    // An earlier version simply retried on a timer, and passed for the wrong
+    // reason — it sometimes learned the pieces *into* the background and then
+    // detected the holes they left behind when they vanished.
+    const phase = () =>
+      page.evaluate(() => {
+        const canvas = document.querySelectorAll(".lab-canvas")[0];
+        // Board coordinates of the red piece in the synthetic scene.
+        const x = Math.round(canvas.width * 0.22);
+        const y = Math.round(canvas.height * 0.4);
+        const d = canvas.getContext("2d").getImageData(x, y, 1, 1).data;
+        return d[0] > 150 && d[1] < 90 ? "pieces" : "empty";
+      });
+
+    const waitForPhase = async (want, timeout = 20000) => {
+      const deadline = Date.now() + timeout;
+      while (Date.now() < deadline) {
+        if ((await phase()) === want) return true;
+        await page.waitForTimeout(120);
+      }
+      return false;
+    };
+
+    check("the synthetic clip reaches its empty phase", await waitForPhase("empty"));
+    await page.getByRole("button", { name: "Relearn empty board" }).click();
+    await page.waitForTimeout(1500);
+    check("the synthetic clip reaches its pieces phase", await waitForPhase("pieces"));
+
     let readout = "";
     let learned = false;
-    for (let attempt = 0; attempt < 6 && !learned; attempt++) {
-      await page.getByRole("button", { name: "Relearn empty board" }).click();
-      const deadline = Date.now() + 4000;
-      while (Date.now() < deadline) {
-        readout = await page.locator(".lab-readout").innerText();
-        if (/blobs [3-9]/.test(readout) && !readout.includes("not learned")) {
-          learned = true;
-          break;
-        }
-        await page.waitForTimeout(150);
+    const deadline = Date.now() + 6000;
+    while (Date.now() < deadline) {
+      readout = await page.locator(".lab-readout").innerText();
+      if (/blobs [3-9]/.test(readout) && !readout.includes("not learned")) {
+        learned = true;
+        break;
       }
+      await page.waitForTimeout(150);
     }
 
     check("finds the three pieces on the table", learned, readout.replace(/\n/g, " · "));
@@ -156,6 +183,12 @@ async function main() {
       "reads their colours through the mirror",
       /red/.test(readout) && /green/.test(readout) && /blue/.test(readout),
       readout.match(/tokens [^\n]*/)?.[0] ?? "no tokens line",
+    );
+
+    check(
+      "and reports the exposure it corrected for",
+      /exposure \d/.test(readout),
+      readout.match(/exposure [^\n]*/)?.[0] ?? "not reported",
     );
 
     const timings = await page.locator(".lab-timings").innerText();

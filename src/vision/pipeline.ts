@@ -167,6 +167,17 @@ export class VisionPipeline {
     return this.board;
   }
 
+  /**
+   * The occupancy detector itself, for screens that tune or inspect it.
+   *
+   * Exposed deliberately: the thresholds that matter can only be judged under
+   * a real mirror in a real room, so the vision lab adjusts them live on the
+   * device rather than asking anyone to guess at them in a config file.
+   */
+  get occupancyDetector(): OccupancyDetector | null {
+    return this.occupancy;
+  }
+
   /** The atlas, built lazily because it needs a DOM canvas. */
   glyphAtlas(): GlyphAtlas {
     if (!this.atlas) this.atlas = buildAtlas(this.alphabet);

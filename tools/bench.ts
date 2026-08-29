@@ -13,6 +13,7 @@ import { simplify, traceContours } from "../src/vision/contour.js";
 import { InkDetector } from "../src/vision/ink.js";
 import { blurToField } from "../src/vision/mask.js";
 import { OccupancyDetector } from "../src/vision/occupancy.js";
+import { createGainScratch, estimateGain } from "../src/vision/photometry.js";
 import { createRectifiedFrame } from "../src/vision/rectify.js";
 
 const W = Number(process.argv[2] ?? 256);
@@ -70,7 +71,16 @@ function bench(name: string, fn: () => void, iterations = 200): number {
 }
 
 console.log(`board ${W}x${H} (${((W * H) / 1000).toFixed(0)}k px)\n`);
+const gainScratch = createGainScratch();
+const reference = new Float32Array(W * H * 3);
+for (let i = 0; i < W * H; i++) {
+  reference[i * 3] = 206;
+  reference[i * 3 + 1] = 202;
+  reference[i * 3 + 2] = 194;
+}
+
 let total = 0;
+bench("  ↳ gain", () => estimateGain(frame.rgba, reference, W * H, { scratch: gainScratch }));
 total += bench("occupancy", () => occupancy.detect(frame));
 total += bench("ink", () => ink.detect(frame.gray));
 total += bench("field", () => blurToField(occupancy.mask, field, 2, blurScratch));
