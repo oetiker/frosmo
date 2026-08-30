@@ -21,12 +21,12 @@
  * Source Code Pro, (c) Adobe, SIL Open Font License 1.1 — see LICENSE-fonts.
  */
 @font-face {
-  font-family: "Atkinson Hyperlegible";
-  font-weight: 700;
+  font-family: "Atkinson Hyperlegible Next";
+  font-weight: 500;
   font-style: normal;
   /* Not `swap`: a fallback here would print the wrong letterforms. */
   font-display: block;
-  src: url("./assets/atkinson-hyperlegible-700.woff2") format("woff2");
+  src: url("./assets/atkinson-next-500.woff2") format("woff2");
 }
 
 /*
@@ -575,7 +575,14 @@ label {
   background: #fff;
   color: #111;
   font-size: 13mm;
-  font-weight: 700;
+  /*
+   * Not bolder. Measured at the size the recogniser sees, weight 700 leaves the
+   * counter of an A eight pixels across and of an 8 sixteen — the holes that
+   * carry the letter's identity close up, and H/N and O/D are exactly the pairs
+   * that depend on them. 500 keeps nearly all the counter of the light weight
+   * with meaningfully more stroke to survive the downsampling.
+   */
+  font-weight: 500;
 }
 
 .tokens {
