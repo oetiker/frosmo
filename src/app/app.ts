@@ -26,7 +26,7 @@ export interface Screen {
   unmount?(): void;
 }
 
-export type ScreenName = "home" | "calibrate" | "play" | "lab" | "print" | "about";
+export type ScreenName = "home" | "calibrate" | "play" | "lab" | "print" | "card" | "about";
 
 export class App {
   readonly camera = new Camera();

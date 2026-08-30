@@ -81,6 +81,19 @@ export interface ClassifyOptions {
    * not reported as the nearest member — it is not reported at all.
    */
   palette?: TokenColor[];
+  /**
+   * Where these inks actually land, measured rather than assumed.
+   *
+   * The centres below are the names of colours; a printed ink under a lamp and
+   * a mirror is not obliged to sit on one. The printed green photographs at
+   * about 145 degrees — between the green centre at 120 and the cyan one at
+   * 180 — and comes out correct but barely, because the margin to the runner-up
+   * is what confidence means here. Given the measurement, the centre moves to
+   * the ink and the margin is real.
+   *
+   * Only the colours named are replaced; anything else keeps its nominal hue.
+   */
+  hues?: ReadonlyArray<{ color: TokenColor; hue: number }>;
 }
 
 /**
@@ -119,9 +132,16 @@ export function classifyColor(
     return wants(color) ? { color, confidence: 1 - hsv.s / minSaturation, hsv } : null;
   }
 
-  const allowed = opts.palette
-    ? HUES.filter((c) => opts.palette!.includes(c.color))
+  const measured = opts.hues;
+  const centres = measured
+    ? HUES.map((c) => {
+        const m = measured.find((x) => x.color === c.color);
+        return m ? { color: c.color, hue: m.hue } : c;
+      })
     : HUES;
+  const allowed = opts.palette
+    ? centres.filter((c) => opts.palette!.includes(c.color))
+    : centres;
   // A palette of nothing but achromatic colours has no hue to match against.
   if (!allowed.length) return null;
   const candidates = allowed;

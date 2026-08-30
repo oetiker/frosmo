@@ -14,7 +14,8 @@ import type { Blob } from "./blobs.js";
 import { createLabelScratch, labelBlobs, type LabelScratch } from "./blobs.js";
 import type { Camera } from "./camera.js";
 import { boardSize, boardToCamera, type Calibration } from "./calibration.js";
-import { classifyColor, type TokenColor } from "./color.js";
+import { rgbToHsv, classifyColor, type ClassifyOptions, type TokenColor } from "./color.js";
+import { TILE } from "./card.js";
 import { IDENTITY_GAIN } from "./photometry.js";
 import { simplify, traceContours, type Contour } from "./contour.js";
 import { InkDetector } from "./ink.js";
@@ -128,6 +129,10 @@ export class VisionPipeline {
   private tileFinder: TileFinder | null = null;
   private cropSourceFor = { w: 0, h: 0 };
   private needs: VisionNeeds = { occupancy: true };
+  /** What the calibration card said about the colours, if there was one. */
+  private colorOptions: ClassifyOptions = {};
+  /** Tile size limits derived from the card, if there was one. */
+  private tileSides: { minSide: number; maxSide: number } | null = null;
   private learning = 0;
   private state: VisionState | null = null;
   private readonly captureScale: number;
@@ -158,6 +163,66 @@ export class VisionPipeline {
     // the new corners.
     this.tableFor = { w: 0, h: 0 };
     this.cropSourceFor = { w: 0, h: 0 };
+    this.applyProfile(cal);
+  }
+
+  /**
+   * Take the numbers off the calibration card, where there is one.
+   *
+   * Everything set here had a hard-coded default measured on one rig from one
+   * photograph, and the vision lab existed so somebody could push the sliders
+   * around until their own rig behaved. A card that has been photographed knows
+   * these for the rig in front of it, so it sets them and the sliders go back
+   * to being a diagnostic.
+   *
+   * Without a card nothing changes: the defaults stay, and a calibration made
+   * by dragging handles works exactly as it did.
+   */
+  private applyProfile(cal: Calibration): void {
+    const p = cal.profile;
+    if (p) {
+      this.inkDetector?.configure({ contrast: p.ink.contrast, maxLuma: p.ink.maxLuma });
+
+      /*
+       * Colour, twice over.
+       *
+       * Where each ink lands, so a hue sits on its own centre rather than
+       * between two names; and how little saturation still counts as coloured,
+       * because a mirror and a dim lamp wash the inks out and the shipped floor
+       * of 0.28 then discards every token as grey. The floor goes below the
+       * weakest ink the card showed, not to a guess.
+       */
+      const hues: Array<{ color: TokenColor; hue: number }> = [];
+      let weakest = 1;
+      for (const swatch of p.palette) {
+        const hsv = rgbToHsv(swatch.rgb[0], swatch.rgb[1], swatch.rgb[2]);
+        hues.push({ color: swatch.name as TokenColor, hue: hsv.h });
+        weakest = Math.min(weakest, hsv.s);
+      }
+      this.colorOptions = hues.length
+        ? { hues, minSaturation: Math.min(0.28, Math.max(0.08, weakest * 0.6)) }
+        : {};
+    } else {
+      this.colorOptions = {};
+      this.inkDetector?.configure({ contrast: 0.12, maxLuma: 210 });
+    }
+
+    /*
+     * How big a tile is, when the card has said how big the board is.
+     *
+     * The finder otherwise accepts any interior between 7% and 30% of the
+     * board's short side, which on a 176 mm play area is anything from 12 mm to
+     * 53 mm — a range that contains a printed tile, a token, and several holes
+     * that are neither. A generous band around the real size still admits
+     * somebody else's tiles while dropping the rest.
+     */
+    const mm = cal.playAreaMm;
+    if (mm) {
+      const side = TILE.sizeMm / Math.min(mm.w, mm.h);
+      this.tileSides = { minSide: side * 0.55, maxSide: side * 1.7 };
+    } else {
+      this.tileSides = null;
+    }
   }
 
   setNeeds(needs: VisionNeeds): void {
@@ -318,7 +383,7 @@ export class VisionPipeline {
             Math.min(255, blob.r * gain.r),
             Math.min(255, blob.g * gain.g),
             Math.min(255, blob.b * gain.b),
-            palette ? { palette } : {},
+            palette ? { ...this.colorOptions, palette } : this.colorOptions,
           );
           if (!match) continue;
           tokens.push({
@@ -354,6 +419,7 @@ export class VisionPipeline {
       this.tileFinder ??= new TileFinder(this.board.w, this.board.h);
       const found = this.tileFinder.find(inkDetector.mask, {
         scratch: this.labelScratch ?? undefined,
+        ...(this.tileSides ?? {}),
       });
       for (const tile of found) {
         candidates.push({ cx: tile.cx, cy: tile.cy, side: Math.min(tile.w, tile.h) * INTERIOR });

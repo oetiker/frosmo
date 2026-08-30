@@ -36,6 +36,7 @@ export function labScreen(): Screen {
       const readout = new Readout();
       const status = h("div", { class: "cal-status" }, "Starting the camera…");
       const controls = h("div", { class: "lab-controls" });
+      const cardBox = h("div", { class: "lab-card" });
 
       root.append(
         h(
@@ -64,7 +65,7 @@ export function labScreen(): Screen {
             panel("Ink — adaptive threshold", ink),
             panel("Tokens and tiles", found),
           ),
-          h("div", { class: "lab-side" }, status, timings, readout.el, controls),
+          h("div", { class: "lab-side" }, status, timings, readout.el, cardBox, controls),
         ),
       );
 
@@ -81,6 +82,49 @@ export function labScreen(): Screen {
        * guessing at them in a source file and redeploying takes a round trip
        * for every guess.
        */
+      /*
+       * What the calibration card measured, if one was ever scanned.
+       *
+       * Read-only, deliberately. These used to be things somebody guessed at
+       * with a slider; showing the measurement next to the masks it produced is
+       * the useful version of that, and there is nothing to drag.
+       */
+      const renderCard = () => {
+        cardBox.textContent = "";
+        const cal = app.calibration;
+        const p = cal?.profile;
+        if (!p) {
+          cardBox.append(
+            h("div", { class: "cal-caption" }, "No calibration card scanned — shipped defaults in use."),
+          );
+          return;
+        }
+        const rows: Array<[string, string]> = [
+          ["ink contrast", p.ink.contrast.toFixed(3)],
+          ["max luma", p.ink.maxLuma.toFixed(0)],
+          ["lens blur", `${p.blur.toFixed(1)} px`],
+          ["card scale", `${p.mmPerPixel.toFixed(3)} mm/px`],
+          ["white gain", `${p.gain.r.toFixed(2)} ${p.gain.g.toFixed(2)} ${p.gain.b.toFixed(2)}`],
+        ];
+        if (cal?.playAreaMm) {
+          rows.push(["play area", `${Math.round(cal.playAreaMm.w)} × ${Math.round(cal.playAreaMm.h)} mm`]);
+        }
+        cardBox.append(
+          h("div", { class: "cal-caption" }, "From the calibration card"),
+          ...rows.map(([k, v]) => h("div", { class: "lab-row" }, h("span", {}, k), h("b", {}, v))),
+          ...p.palette.map((c) =>
+            h(
+              "div",
+              { class: "lab-row" },
+              h("span", {}, c.name),
+              h("b", {}, `rgb(${c.rgb.map((v) => Math.round(v)).join(", ")})`),
+            ),
+          ),
+          ...p.warnings.map((w) => h("div", { class: "cal-caption error" }, w)),
+        );
+      };
+      renderCard();
+
       const renderControls = () => {
         const detector = app.pipeline.occupancyDetector;
         controls.textContent = "";

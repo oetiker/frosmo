@@ -700,3 +700,49 @@ label {
   font-family: ui-monospace, Menlo, monospace;
   white-space: pre;
 }
+
+/*
+ * The calibration card.
+ *
+ * Sized in millimetres and printed at 100%: everything on it is measured
+ * against its printed size, so a browser scaling it to fit the margins would
+ * quietly falsify the one number the card cannot check about itself.
+ */
+.cal-card {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 190mm;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+}
+
+.card-sheet {
+  break-inside: avoid;
+}
+
+.lab-card {
+  display: grid;
+  gap: 2px;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.lab-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.cal-card-note:empty {
+  display: none;
+}
+
+@media print {
+  .card-sheet .cal-card {
+    width: 190mm;
+    max-width: none;
+    border: none;
+  }
+}

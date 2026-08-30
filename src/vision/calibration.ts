@@ -22,6 +22,7 @@ import {
   type Point,
   type Quad,
 } from "./homography.js";
+import type { RigProfile } from "./card-profile.js";
 import type { BoardSize } from "./rectify.js";
 import { load, remove, save } from "../util/storage.js";
 
@@ -59,6 +60,26 @@ export interface Calibration {
   cameraId?: string;
   /** Human-readable name of that camera, for when the id has rotated. */
   cameraLabel?: string;
+  /**
+   * What the calibration card measured about this rig.
+   *
+   * Optional, and stays optional: a calibration made by dragging the handles
+   * has no card behind it, and everything downstream falls back to the shipped
+   * defaults when it is missing. Those defaults are one rig's numbers from one
+   * photograph — fine as a starting point, wrong as a claim about anybody
+   * else's table, which is the whole reason the card exists.
+   */
+  profile?: RigProfile;
+  /**
+   * How big the play area is in real life, in millimetres.
+   *
+   * Only a card scan knows this — dragging handles over a camera image says
+   * where the play area is but nothing about how large. It is what lets the
+   * detectors reason in millimetres: a printed tile is 22 mm whatever the
+   * board resolution is, so with this the tile finder can be told the size to
+   * expect instead of guessing a fraction of the board.
+   */
+  playAreaMm?: { w: number; h: number };
   createdAt: number;
 }
 
