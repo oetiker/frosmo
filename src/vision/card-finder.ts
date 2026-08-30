@@ -120,6 +120,39 @@ export function findRings(
       }
     }
     if (!hollow) continue;
+    /*
+     * The corners of the bounding box, which a ring never reaches into and a
+     * rectangle always does.
+     *
+     * Without this a printed colour swatch qualifies. The adaptive threshold
+     * lights only the swatch's edges — its interior is not darker than its own
+     * neighbourhood — so what reaches the blob finder is a hollow rectangle of
+     * a ring's size, a ring's aspect and very nearly a ring's fill. A ring's
+     * ink lies inside its outer circle, and the corner of the box that circle
+     * is inscribed in is 13% of a radius outside it; a rectangle's ink runs
+     * right through. One corner is allowed, for a mark with something touching
+     * it.
+     *
+     * The probe sits near the corner rather than well inside it, and that is
+     * the safe direction on both counts: further out is further clear of a
+     * ring's own ink, and a rectangle's ink runs all the way to the corner
+     * anyway. On one rendered card it took the candidate list from eight marks
+     * to the five that are really there.
+     */
+    const inset = 0.06;
+    let filledCorners = 0;
+    for (const [px, py] of [
+      [b.minX + bw * inset, b.minY + bh * inset],
+      [b.maxX - bw * inset, b.minY + bh * inset],
+      [b.maxX - bw * inset, b.maxY - bh * inset],
+      [b.minX + bw * inset, b.maxY - bh * inset],
+    ]) {
+      const x = Math.round(px);
+      const y = Math.round(py);
+      if (x >= 0 && y >= 0 && x < w && y < h && ink.mask.data[y * w + x]) filledCorners++;
+    }
+    if (filledCorners > 1) continue;
+
     rings.push({ x: cx, y: cy, size: Math.max(bw, bh) });
   }
 
