@@ -31,7 +31,7 @@ import { labelBlobs } from "./blobs.js";
 import { CARD_ASPECT, FIDUCIAL_INNER, FIDUCIAL_OUTER, FIDUCIALS, KEY } from "./card.js";
 import type { Calibration } from "./calibration.js";
 import { InkDetector } from "./ink.js";
-import type { Quad } from "./homography.js";
+import { applyHomography, solveHomography, type Quad } from "./homography.js";
 
 export interface CardSighting {
   /** The four registration marks in frame pixels, ordered TL, TR, BR, BL. */
@@ -52,6 +52,29 @@ export interface FindCardOptions {
 
 /** Fraction of its bounding box an annulus of the card's radii covers. */
 const RING_FILL = (Math.PI / 4) * (1 - (FIDUCIAL_INNER / FIDUCIAL_OUTER) ** 2);
+
+/**
+ * How flat a circle is allowed to arrive.
+ *
+ * A camera looking at a plane squashes it by the sine of the angle it looks
+ * down at: 1.4 to 1 at forty-five degrees, 2 to 1 at thirty, 2.9 to 1 at
+ * twenty. A mirror rig is not a camera on a tripod looking straight down — it
+ * is a reflector clipped over a tablet, looking along the table almost as much
+ * as at it — so the marks arrive as ellipses, and the far pair much flatter
+ * than the near pair.
+ *
+ * The first version allowed 1.7, and on a photograph of a real rig the two far
+ * marks measured 1.68 and 1.71: one detected, one not, from the same card. The
+ * two near ones came in at 1.23 and were never in doubt. That is the whole of
+ * the "only the lower two get marked" report.
+ *
+ * Four and a half is about fifteen degrees, which is flatter than anything
+ * still worth playing on: below that the tiles hide each other and there are
+ * not enough pixels left across a glyph to read it. The cost of allowing it is
+ * more candidates to sift, and the sifting — four extremes plus a fifth mark
+ * where the perspective says it should be — does not care how many it is given.
+ */
+const MAX_SQUASH = 4.5;
 
 export interface Ring {
   x: number;
@@ -98,19 +121,28 @@ export function findRings(
   for (const b of labelBlobs(ink.mask, { minArea: minRing * minRing * 0.2, limit: 400 }).blobs) {
     const bw = b.maxX - b.minX + 1;
     const bh = b.maxY - b.minY + 1;
-    if (bw < minRing || bh < minRing || bw > maxRing || bh > maxRing) continue;
-    const aspect = bw / bh;
-    if (aspect < 0.6 || aspect > 1.7) continue;
+    // Size is judged on the long axis. A squashed circle keeps its width and
+    // loses its height, so testing both against one lower bound would rule out
+    // exactly the far marks that the angle has already made hardest.
+    const long = Math.max(bw, bh);
+    const shortSide = Math.min(bw, bh);
+    if (long < minRing || long > maxRing) continue;
+    if (shortSide < Math.max(4, minRing / MAX_SQUASH)) continue;
+    if (long / shortSide > MAX_SQUASH) continue;
     const fill = b.area / (bw * bh);
     if (fill < RING_FILL * 0.55 || fill > RING_FILL * 1.6) continue;
     // Hollow: the middle of the box is background, and stays background a
     // little way out, so a letter with one small counter does not qualify.
     const cx = Math.round((b.minX + b.maxX) / 2);
     const cy = Math.round((b.minY + b.maxY) / 2);
-    const probe = Math.max(1, Math.round(Math.min(bw, bh) * 0.12));
+    // Probed as an ellipse, not a square: the hole is squashed by exactly as
+    // much as the mark around it, so a square sized by the shorter axis would
+    // shrink to nothing on the very marks that need the most care.
+    const probeX = Math.max(1, Math.round(bw * 0.12));
+    const probeY = Math.max(1, Math.round(bh * 0.12));
     let hollow = true;
-    for (let dy = -probe; dy <= probe && hollow; dy++) {
-      for (let dx = -probe; dx <= probe; dx++) {
+    for (let dy = -probeY; dy <= probeY && hollow; dy++) {
+      for (let dx = -probeX; dx <= probeX; dx++) {
         const x = cx + dx;
         const y = cy + dy;
         if (x < 0 || y < 0 || x >= w || y >= h || ink.mask.data[y * w + x]) {
@@ -162,64 +194,133 @@ export function findRings(
 /**
  * Pick the five that are the card, and put them in order.
  *
- * The four corners are the extreme ones: a convex hull would do it, but with a
- * handful of candidates the corner nearest each corner of their own bounding
- * box is simpler and behaves the same under perspective. The key is then
- * whichever remaining ring sits closest to where the card says it should be
- * once those four are believed.
+ * The first version took the candidate nearest each corner of their own
+ * bounding box. That works for a card lying square to the frame and quietly
+ * stops working as it turns: at forty-five degrees the card is a diamond, its
+ * marks sit at the top, right, bottom and left of the box rather than in its
+ * corners, and the fifth mark is as near a box corner as any of them. Five
+ * perfectly good marks, and the wrong four chosen.
+ *
+ * Four marks at the corners of a rectangle are, under any perspective, the four
+ * that enclose the most area — the fifth lies between two of them and swapping
+ * it in can only lose area. So: hull the candidates, take the four-subsets in
+ * descending area, and accept the first that a spare mark vouches for by
+ * sitting where the perspective says the key must be. That is rotation-proof,
+ * and it survives junk on the table: a stray ring can only win by making a
+ * bigger quadrilateral than the card's, and then it still has to produce a key.
  */
 function choose(rings: Ring[]): CardSighting | null {
   if (rings.length < 5) return null;
 
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const r of rings) {
-    minX = Math.min(minX, r.x); maxX = Math.max(maxX, r.x);
-    minY = Math.min(minY, r.y); maxY = Math.max(maxY, r.y);
-  }
-  const nearest = (px: number, py: number) =>
-    rings.reduce((best, r) =>
-      Math.hypot(r.x - px, r.y - py) < Math.hypot(best.x - px, best.y - py) ? r : best,
-    );
-  const corners = [
-    nearest(minX, minY),
-    nearest(maxX, minY),
-    nearest(maxX, maxY),
-    nearest(minX, maxY),
-  ];
-  if (new Set(corners).size !== 4) return null;
+  // The corner marks are on the hull; the key is not, so a hull of fewer than
+  // four points is not a card.
+  const outer = hull(rings);
+  if (outer.length < 4) return null;
+  // Enough to hold the card's four plus a table's worth of clutter, and few
+  // enough that every four-subset can be tried.
+  const pool = outer.length > 12 ? largestSpread(outer, 12) : outer;
 
-  // Where the key would be, on each of the four ways round the card that the
-  // corners could be labelled. Whichever guess a spare ring actually sits at is
-  // the right one — and it settles rotation and reflection together.
-  const spare = rings.filter((r) => !corners.includes(r));
-  if (!spare.length) return null;
-
-  const along = (KEY.cx - FIDUCIALS[0].cx) / (FIDUCIALS[1].cx - FIDUCIALS[0].cx);
-  let best: { order: Ring[]; key: Ring; d: number; mirrored: boolean } | null = null;
-  for (let turn = 0; turn < 4; turn++) {
-    for (const mirrored of [false, true]) {
-      const order = mirrored
-        ? [corners[(4 - turn) % 4], corners[(3 - turn + 4) % 4], corners[(2 - turn + 4) % 4], corners[(1 - turn + 4) % 4]]
-        : [corners[turn % 4], corners[(turn + 1) % 4], corners[(turn + 2) % 4], corners[(turn + 3) % 4]];
-      const wantX = order[0].x + (order[1].x - order[0].x) * along;
-      const wantY = order[0].y + (order[1].y - order[0].y) * along;
-      for (const s of spare) {
-        const d = Math.hypot(s.x - wantX, s.y - wantY);
-        if (!best || d < best.d) best = { order, key: s, d, mirrored };
+  const marks = FIDUCIALS.map((f) => ({ x: f.cx, y: f.cy })) as Quad;
+  const quads: Array<{ pick: Ring[]; area: number }> = [];
+  for (let a = 0; a < pool.length; a++) {
+    for (let b = a + 1; b < pool.length; b++) {
+      for (let c = b + 1; c < pool.length; c++) {
+        for (let d = c + 1; d < pool.length; d++) {
+          // Hull order is already a simple polygon, so the four keep their
+          // cyclic order and the shoelace area is the real one.
+          const pick = [pool[a], pool[b], pool[c], pool[d]];
+          quads.push({ pick, area: Math.abs(shoelace(pick)) });
+        }
       }
     }
   }
-  if (!best) return null;
-  // The key has to be where it was predicted, not merely closest: a stray ring
-  // on the table would otherwise get to decide which way up the card is.
-  const scale = Math.hypot(best.order[1].x - best.order[0].x, best.order[1].y - best.order[0].y);
-  if (best.d > scale * 0.12) return null;
+  quads.sort((x, y) => y.area - x.area);
 
-  return {
-    quad: best.order.map((r) => ({ x: r.x, y: r.y })) as Quad,
-    key: { x: best.key.x, y: best.key.y },
-    mirrored: best.mirrored,
+  for (const { pick, area } of quads) {
+    const spare = rings.filter((r) => !pick.includes(r));
+    if (!spare.length) continue;
+    for (let turn = 0; turn < 4; turn++) {
+      for (const mirrored of [false, true]) {
+        const order = mirrored
+          ? [pick[(4 - turn) % 4], pick[(3 - turn + 4) % 4], pick[(2 - turn + 4) % 4], pick[(1 - turn + 4) % 4]]
+          : [pick[turn % 4], pick[(turn + 1) % 4], pick[(turn + 2) % 4], pick[(turn + 3) % 4]];
+        let want;
+        try {
+          want = applyHomography(
+            solveHomography(marks, order.map((r) => ({ x: r.x, y: r.y })) as Quad),
+            KEY.cx,
+            KEY.cy,
+          );
+        } catch {
+          // Four marks that do not make a quadrilateral: not a card, whatever
+          // sits near them.
+          continue;
+        }
+        /*
+         * How close the key has to be, judged against the distance it is
+         * predicted to sit from the corner it belongs to rather than against
+         * the card as a whole. Under a steep view that corner may be a third
+         * the size of the opposite one, and a tolerance taken from the whole
+         * card would be looser there than the gap it is meant to resolve. The
+         * floor keeps a distant card from demanding sub-pixel agreement.
+         */
+        const reach = Math.hypot(want.x - order[0].x, want.y - order[0].y);
+        const tol = Math.max(reach * 0.4, Math.sqrt(area) * 0.035);
+        for (const s of spare) {
+          if (Math.hypot(s.x - want.x, s.y - want.y) > tol) continue;
+          return {
+            quad: order.map((r) => ({ x: r.x, y: r.y })) as Quad,
+            key: { x: s.x, y: s.y },
+            mirrored,
+          };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** Signed area of a polygon, twice over; only its magnitude and sign are used. */
+function shoelace(p: Array<{ x: number; y: number }>): number {
+  let sum = 0;
+  for (let i = 0; i < p.length; i++) {
+    const q = p[(i + 1) % p.length];
+    sum += p[i].x * q.y - q.x * p[i].y;
+  }
+  return sum / 2;
+}
+
+/** Convex hull, counter-clockwise in image coordinates. Andrew's monotone chain. */
+function hull(points: Ring[]): Ring[] {
+  const sorted = [...points].sort((a, b) => (a.x - b.x) || (a.y - b.y));
+  if (sorted.length < 3) return sorted;
+  const cross = (o: Ring, a: Ring, b: Ring) =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const half = (pts: Ring[]) => {
+    const out: Ring[] = [];
+    for (const p of pts) {
+      while (out.length > 1 && cross(out[out.length - 2], out[out.length - 1], p) <= 0) out.pop();
+      out.push(p);
+    }
+    out.pop();
+    return out;
   };
+  return [...half(sorted), ...half([...sorted].reverse())];
+}
+
+/** Thin a crowded hull down to the `keep` points that span it most widely. */
+function largestSpread(points: Ring[], keep: number): Ring[] {
+  let cx = 0;
+  let cy = 0;
+  for (const p of points) {
+    cx += p.x / points.length;
+    cy += p.y / points.length;
+  }
+  return [...points]
+    .sort((a, b) => Math.hypot(b.x - cx, b.y - cy) - Math.hypot(a.x - cx, a.y - cy))
+    .slice(0, keep)
+    // Put them back in hull order, so a four-subset is still a simple polygon.
+    .sort((a, b) => points.indexOf(a) - points.indexOf(b));
 }
 
 /** Ring geometry, exported so the printer and the tests draw the same marks. */
