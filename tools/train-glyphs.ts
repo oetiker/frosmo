@@ -105,7 +105,7 @@ function sample(ch: string): Uint8Array {
    * it is a quarter turn, and the reader tries those separately rather than
    * making every sample pay for the rare case.
    */
-  const angle = rnd() < 0.8 ? between(-0.18, 0.18) : between(-0.62, 0.62);
+  const angle = between(-0.18, 0.18);
   const shear = between(-0.14, 0.14);
   // How much of the crop the glyph fills: a tile far from the camera is small
   // in frame, one close to it nearly fills the crop.
