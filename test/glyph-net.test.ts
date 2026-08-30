@@ -95,6 +95,27 @@ describe("readGlyph", () => {
     expect(rose).toBe(compared);
   });
 
+  it("gives the first character in the alphabet a real margin", () => {
+    // A regression with an unusually narrow blast radius. The runner-up search
+    // seeded its winner at index 0, so on the one character that is index 0 —
+    // the letter A — the winner was also found as its own runner-up and the
+    // margin came out as exactly zero. Every caller drops a reading below its
+    // margin threshold, so A was recognised at full confidence and discarded
+    // every single time, and no other character could ever hit it.
+    const a = fixture.candidates.find((c) => c.label === "A");
+    if (a) {
+      const r = readGlyph(bitmap(a.bits))!;
+      expect(r.char).toBe("A");
+      expect(r.margin).toBeGreaterThan(0.5);
+    }
+    // And structurally, whatever the model says: a confident winner is never
+    // reported with a zero margin.
+    for (const g of glyphs) {
+      const r = readGlyph(g);
+      if (r && r.confidence > 0.9) expect(r.margin).toBeGreaterThan(0);
+    }
+  });
+
   it("rejects a bitmap of the wrong size", () => {
     expect(readGlyph(new Uint8Array(10))).toBeNull();
   });

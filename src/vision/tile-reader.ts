@@ -72,6 +72,9 @@ export interface ReaderOptions {
 interface CacheEntry {
   /** null means "looked at this and it is not a character". */
   reading: TileReading | null;
+  /** Where on the board this entry is, so a blob can be matched to it. */
+  cx: number;
+  cy: number;
   /** Blob size when the entry was made, so a changed blob can be re-read. */
   side: number;
   lastSeen: number;
@@ -104,38 +107,65 @@ const RECHECK_REFUSAL = 90;
 const SIDE_TOLERANCE = 0.12;
 
 export class TileReader {
-  private cache = new Map<number, CacheEntry>();
+  private cache: CacheEntry[] = [];
   private frame = 0;
+  /** Where the last frame stopped spending its budget. See the note in read(). */
+  private cursor = 0;
 
   /** Forget everything; the board has changed under us. */
   reset(): void {
-    this.cache.clear();
+    this.cache.length = 0;
+    this.cursor = 0;
   }
 
   get cached(): number {
-    return this.cache.size;
+    return this.cache.length;
+  }
+
+  /**
+   * The entry for a blob, matched on proximity rather than an exact key.
+   *
+   * A tile's centroid wanders a pixel or two between frames as the mask edges
+   * move, and a grid key turns that into a miss every time the wander crosses a
+   * cell boundary — so the reading is thrown away and paid for again, which on
+   * a full sheet means the budget never reaches the end of the queue.
+   */
+  private find(cx: number, cy: number, side: number): CacheEntry | undefined {
+    const near = Math.max(2, side * 0.3);
+    let best: CacheEntry | undefined;
+    let bestD = near * near;
+    for (const e of this.cache) {
+      const dx = e.cx - cx;
+      const dy = e.cy - cy;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        best = e;
+      }
+    }
+    return best;
   }
 
   read(frame: RectifiedFrame, blobs: Blob[], opts: ReaderOptions = {}): TileReading[] {
     const limits: GlyphLimits = { ...glyphLimits(frame.size.w, frame.size.h), ...opts.limits };
     const minConfidence = opts.minConfidence ?? 0.45;
     const minMargin = opts.minMargin ?? 0.12;
-    let budget = opts.budget ?? 4;
+    const budget = opts.budget ?? 4;
     const crop = new Uint8ClampedArray(CROP * CROP);
     const now = ++this.frame;
     const out: TileReading[] = [];
 
+    // Pass one: report everything already known, and collect what is not.
+    const unknown: Array<{ blob: Blob; side: number }> = [];
     for (const blob of blobs) {
       if (glyphCandidate(blob, limits) !== "ok") continue;
 
-      const bw = blob.maxX - blob.minX + 1;
-      const bh = blob.maxY - blob.minY + 1;
-      const side = Math.max(bw, bh) * 1.3;
-      const key = cacheKey(blob.cx, blob.cy, frame.size.w);
-
-      const hit = this.cache.get(key);
+      const side = Math.max(blob.maxX - blob.minX + 1, blob.maxY - blob.minY + 1) * 1.3;
+      const hit = this.find(blob.cx, blob.cy, side);
       if (hit) {
         hit.lastSeen = now;
+        hit.cx = blob.cx;
+        hit.cy = blob.cy;
         if (hit.reading) {
           hit.reading.cx = blob.cx;
           hit.reading.cy = blob.cy;
@@ -144,13 +174,35 @@ export class TileReader {
         }
         const grew = Math.abs(side - hit.side) > hit.side * SIDE_TOLERANCE;
         if (!grew && now < hit.recheck) continue;
-        this.cache.delete(key);
+        this.cache.splice(this.cache.indexOf(hit), 1);
       }
+      unknown.push({ blob, side });
+    }
 
-      if (budget <= 0) continue;
-      budget--;
+    /*
+     * Pass two: spend the budget, resuming where the last frame left off.
+     *
+     * The order candidates arrive in is not neutral — labelBlobs returns them
+     * largest first, and ink area is very nearly a measure of how fat a letter
+     * is. Always starting at the front means M, W and B are re-read forever
+     * while A, I, E, F, T and 1 wait at the back of a queue the budget never
+     * reaches. On a real sheet that is not a delay, it is a permanent blind
+     * spot: those letters simply never appear. Rotating the starting point
+     * gives every candidate its turn, and the whole board is covered in
+     * ceil(n / budget) frames no matter what order it arrives in.
+     */
+    if (this.cursor >= unknown.length) this.cursor = 0;
+    for (let n = 0; n < unknown.length && n < budget; n++) {
+      const { blob, side } = unknown[(this.cursor + n) % unknown.length];
       const refuse = () =>
-        this.cache.set(key, { reading: null, side, lastSeen: now, recheck: now + RECHECK_REFUSAL });
+        this.cache.push({
+          reading: null,
+          cx: blob.cx,
+          cy: blob.cy,
+          side,
+          lastSeen: now,
+          recheck: now + RECHECK_REFUSAL,
+        });
 
       if (!opts.source?.sample(blob.cx, blob.cy, side, 0, crop, CROP)) {
         sampleUpright(frame, blob.cx, blob.cy, side, crop, CROP);
@@ -158,11 +210,9 @@ export class TileReader {
 
       const normalised = normaliseGlyph(crop, CROP, CROP);
 
-      // The network has no answer for "nothing". Given an empty bitmap it
-      // reports whichever class its biases favour, with enough confidence to
-      // be believed — so a blank patch of paper became a letter. Given a solid
-      // one it does the same. Both are rejected here, on the amount of ink,
-      // before the question is asked.
+      // The amount of ink, before the model is asked. Cheaper than inference,
+      // and it takes out the two cases the model has least to say about: a
+      // patch of blank paper, and a shape so solid it cannot be a letter.
       let ink = 0;
       for (let i = 0; i < normalised.length; i++) ink += normalised[i];
       const density = ink / normalised.length;
@@ -195,26 +245,17 @@ export class TileReader {
         cy: blob.cy,
         size: side,
       };
-      this.cache.set(key, { reading, side, lastSeen: now, recheck: 0 });
+      this.cache.push({ reading, cx: blob.cx, cy: blob.cy, side, lastSeen: now, recheck: 0 });
       out.push({ ...reading });
     }
+    this.cursor += budget;
 
-    for (const [key, entry] of this.cache) {
-      if (now - entry.lastSeen > FORGET) this.cache.delete(key);
+    for (let i = this.cache.length - 1; i >= 0; i--) {
+      if (now - this.cache[i].lastSeen > FORGET) this.cache.splice(i, 1);
     }
 
     return out;
   }
-}
-
-/**
- * Cache key from position, on a coarse grid.
- *
- * Coarse on purpose: a tile jitters by a pixel or two between frames as the
- * mask edges move, and a key that changed with the jitter would never hit.
- */
-function cacheKey(cx: number, cy: number, width: number): number {
-  return (Math.round(cy / 5) * width + Math.round(cx / 5)) | 0;
 }
 
 function rotate(src: Uint8Array, turns: 1 | 2 | 3): Uint8Array {

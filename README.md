@@ -26,7 +26,7 @@ Four detectors, each computed only when a game asks for it:
 |---|---|---|
 | **occupancy** | anything opaque on the table | Silhouette, Bounce |
 | **ink** | pen strokes on light paper | Bounce |
-| **tokens** | coloured pieces, sorted into eight colours | Colour Rush |
+| **tokens** | coloured pieces, sorted into eight hues | Colour Rush |
 | **tiles** | printed letters and digits, read by a small CNN | Spell It |
 
 ## The games
@@ -133,6 +133,14 @@ border. That is the whole training set; there is no corpus to download.
 ### Saying no
 
 There is a thirty-seventh class: *none of these*.
+
+The colour classifier does the same thing, for the same reason. Every blob the
+occupancy mask finds is asked what colour it is, and on a table with a printed
+sheet on it most of those blobs are the sheet. A classifier obliged to answer
+says *white* — correctly, and at high confidence, because paper is white — and
+the board fills with tokens that are really the tiles' own faces. So white, grey
+and black are reported only when a game says it might see them; otherwise an
+achromatic blob is not a token at all.
 
 It is the difference between working and not. Photograph the app's own printout
 on a real table and the blob finder hands the recogniser thirty-six candidates,

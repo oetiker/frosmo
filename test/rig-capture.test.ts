@@ -15,6 +15,7 @@
 import { describe, expect, it } from "vitest";
 import { readGlyph } from "../src/vision/glyph-net.js";
 import fixture from "./fixtures/rig-candidates.json";
+import sheet from "./fixtures/rig-sheet.json";
 
 const N = fixture.size;
 
@@ -79,5 +80,48 @@ describe("one capture from the rig", () => {
       if (readGlyph(bitmap(c.bits), "ABCDEFGHIJKLMNOPQRSTUVWXYZ")?.char === c.label) right++;
     }
     expect(right).toBeGreaterThanOrEqual(letters.length - 1);
+  });
+});
+
+describe("the whole printed sheet, on the rig", () => {
+  /*
+   * The capture the first one should have been: every tile inside the play
+   * area, so all 36 characters are whole rather than clipped by the board edge.
+   * Labelled from each candidate's position in the sheet's own layout — never
+   * from what the recogniser said — so the test is not marking its own work.
+   *
+   * It exists because of what it caught. Against the model as first shipped it
+   * scores 24 of 36, and the twelve it drops are not random: they are the ones
+   * with the least ink. Chief among them A, which was read perfectly every time
+   * and thrown away every time by a runner-up search that made class 0 its own
+   * runner-up. No other character in the alphabet could hit that.
+   */
+  const chars = sheet.candidates.filter((c) => c.label !== "");
+  const junk = sheet.candidates.filter((c) => c.label === "");
+
+  it("holds every character on the sheet", () => {
+    expect(chars).toHaveLength(36);
+    expect(chars.map((c) => c.label).sort().join("")).toBe(
+      "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    );
+  });
+
+  it("reads all but a couple of them", () => {
+    const wrong = chars.filter((c) => readGlyph(bitmap(c.bits))?.char !== c.label);
+    expect(wrong.length).toBeLessThanOrEqual(2);
+  });
+
+  it("reads A, and gives it a margin a caller will accept", () => {
+    const a = chars.find((c) => c.label === "A")!;
+    const r = readGlyph(bitmap(a.bits))!;
+    expect(r.char).toBe("A");
+    // TileReader's own floor. A read this confidently must survive it.
+    expect(r.margin).toBeGreaterThanOrEqual(0.12);
+    expect(r.confidence).toBeGreaterThanOrEqual(0.45);
+  });
+
+  it("still refuses the border fragments among them", () => {
+    const refused = junk.filter((c) => readGlyph(bitmap(c.bits)) === null).length;
+    expect(refused / junk.length).toBeGreaterThanOrEqual(0.6);
   });
 });

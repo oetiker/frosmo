@@ -76,31 +76,55 @@ export interface ClassifyOptions {
   blackBelow?: number;
   /** Above this value with low saturation it is white. */
   whiteAbove?: number;
-  /** Restrict matching to these colours; anything else is reported as its nearest member. */
+  /**
+   * Which colours this caller can actually be shown. Anything outside it is
+   * not reported as the nearest member — it is not reported at all.
+   */
   palette?: TokenColor[];
 }
 
+/**
+ * Which bucket a sample belongs to, or null for "that is not a token".
+ *
+ * The null matters more than it looks. Every blob the occupancy mask finds gets
+ * asked this question, and on a table with a sheet of paper on it most of those
+ * blobs are paper. Given paper, a classifier that must answer says "white" —
+ * correctly, and at high confidence, because paper is white — and the board
+ * fills with tokens that are really just the tiles' own faces. That is the same
+ * mistake as a 36-way letter model naming a border fragment, and it has the
+ * same answer: let it decline.
+ *
+ * White, grey and black are therefore reported only when a caller says it might
+ * see them. They are real colours, but on a white paper play surface an
+ * achromatic blob is far more likely to be the surface than a piece on it, and
+ * nothing downstream can tell the difference afterwards.
+ */
 export function classifyColor(
   r: number,
   g: number,
   b: number,
   opts: ClassifyOptions = {},
-): ColorMatch {
+): ColorMatch | null {
   const minSaturation = opts.minSaturation ?? 0.28;
   const blackBelow = opts.blackBelow ?? 0.22;
   const whiteAbove = opts.whiteAbove ?? 0.72;
   const hsv = rgbToHsv(r, g, b);
+  const wants = (c: TokenColor) => !!opts.palette?.includes(c);
 
-  if (hsv.v < blackBelow) return { color: "black", confidence: 1 - hsv.v / blackBelow, hsv };
+  if (hsv.v < blackBelow) {
+    return wants("black") ? { color: "black", confidence: 1 - hsv.v / blackBelow, hsv } : null;
+  }
   if (hsv.s < minSaturation) {
     const color: TokenColor = hsv.v > whiteAbove ? "white" : "grey";
-    return { color, confidence: 1 - hsv.s / minSaturation, hsv };
+    return wants(color) ? { color, confidence: 1 - hsv.s / minSaturation, hsv } : null;
   }
 
   const allowed = opts.palette
     ? HUES.filter((c) => opts.palette!.includes(c.color))
     : HUES;
-  const candidates = allowed.length ? allowed : HUES;
+  // A palette of nothing but achromatic colours has no hue to match against.
+  if (!allowed.length) return null;
+  const candidates = allowed;
 
   let best = candidates[0];
   let bestD = 360;

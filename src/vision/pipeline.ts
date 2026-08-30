@@ -307,22 +307,27 @@ export class VisionPipeline {
         // statement about the light as much as about the paint.
         const gain = this.occupancy?.gain ?? IDENTITY_GAIN;
         const palette = this.needs.palette;
-        tokens = blobs.map((blob) => {
+        // A blob with no colour in it is dropped rather than called white.
+        // Most of what occupancy finds under a sheet of paper is the sheet, and
+        // naming every piece of it fills the board with tokens nobody put there.
+        tokens = [];
+        for (const blob of blobs) {
           const match = classifyColor(
             Math.min(255, blob.r * gain.r),
             Math.min(255, blob.g * gain.g),
             Math.min(255, blob.b * gain.b),
             palette ? { palette } : {},
           );
-          return {
+          if (!match) continue;
+          tokens.push({
             blob,
             color: match.color,
             confidence: match.confidence,
             cx: blob.cx,
             cy: blob.cy,
             area: blob.area,
-          };
-        });
+          });
+        }
       }
     }
     t.blobs = performance.now() - mark;

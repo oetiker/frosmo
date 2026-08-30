@@ -61,14 +61,14 @@ const all = Object.entries(MEASURED).flatMap(([ink, samples]) =>
 describe("the printed token sheet, as a real camera sees it", () => {
   it("identifies every token by the ink that printed it", () => {
     for (const { ink, rgb } of all) {
-      expect(classifyColor(rgb[0], rgb[1], rgb[2], { palette: PALETTE }).color).toBe(ink);
+      expect(classifyColor(rgb[0], rgb[1], rgb[2], { palette: PALETTE })!.color).toBe(ink);
     }
   });
 
   it("is confident enough about all of them for a game to act", () => {
     const usable = all.filter(
       ({ rgb }) =>
-        classifyColor(rgb[0], rgb[1], rgb[2], { palette: PALETTE }).confidence >= MIN_CONFIDENCE,
+        classifyColor(rgb[0], rgb[1], rgb[2], { palette: PALETTE })!.confidence >= MIN_CONFIDENCE,
     );
     expect(usable).toHaveLength(all.length);
   });
@@ -78,12 +78,12 @@ describe("the printed token sheet, as a real camera sees it", () => {
     // degrees and blue at 207 — both flanking the cyan centre at 180, which is
     // not an ink on the sheet and never was. Cyan took enough of the margin to
     // push green below the confidence a game will act on.
-    const greens = MEASURED.green.map((rgb) => classifyColor(rgb[0], rgb[1], rgb[2]));
+    const greens = MEASURED.green.map((rgb) => classifyColor(rgb[0], rgb[1], rgb[2])!);
     expect(greens.every((m) => m.color === "green")).toBe(true);
     expect(Math.min(...greens.map((m) => m.confidence))).toBeLessThan(MIN_CONFIDENCE);
 
-    const restricted = MEASURED.green.map((rgb) =>
-      classifyColor(rgb[0], rgb[1], rgb[2], { palette: PALETTE }),
+    const restricted = MEASURED.green.map(
+      (rgb) => classifyColor(rgb[0], rgb[1], rgb[2], { palette: PALETTE })!,
     );
     expect(Math.min(...restricted.map((m) => m.confidence))).toBeGreaterThan(0.4);
   });
@@ -93,7 +93,7 @@ describe("the printed token sheet, as a real camera sees it", () => {
     // light, it lands at 28 — orange. The game used to ask for "yellow", so
     // every one of these was classified correctly and then thrown away.
     for (const rgb of MEASURED.orange) {
-      expect(classifyColor(rgb[0], rgb[1], rgb[2]).color).toBe("orange");
+      expect(classifyColor(rgb[0], rgb[1], rgb[2])!.color).toBe("orange");
     }
   });
 });

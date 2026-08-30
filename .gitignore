@@ -13,3 +13,6 @@ dist/
 
 # Rendered glyph atlas for training — regenerate with: npm run glyphs:render
 .glyphs/
+
+# Extracted diagnostic captures — real photos of someone's room
+.diag2/
