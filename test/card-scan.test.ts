@@ -14,9 +14,9 @@ import {
   playAreaMm,
   scanCard,
 } from "../src/vision/card-scan.js";
-import { CARD_ASPECT, CARD_HEIGHT_MM, CARD_WIDTH_MM, FIDUCIALS } from "../src/vision/card.js";
+import { CARD_ASPECT, CARD_HEIGHT_MM, CARD_WIDTH_MM, FIDUCIALS, WEDGE } from "../src/vision/card.js";
 import { solveHomography, type Quad } from "../src/vision/homography.js";
-import { drawCard } from "./helpers/card.js";
+import { drawCard, perspective } from "./helpers/card.js";
 
 const W = 640;
 const H = 480;
@@ -92,6 +92,61 @@ describe("scanCard", () => {
 
   it("declines when there is no card", () => {
     expect(scanCard(new Uint8ClampedArray(W * H * 4).fill(200), W, H)).toBeNull();
+  });
+});
+
+describe("scanCard, seen at an angle", () => {
+  /** The card's paper corners as a camera on a stand sees them: far edge shorter. */
+  const tilted = (tilt: number): Quad => {
+    const cardH = 1 / CARD_ASPECT;
+    const scale = Math.min(W * 0.55, (H * 0.55) / cardH);
+    const far = (scale / 2) * (1 - tilt);
+    const y0 = H / 2 - (cardH * scale) / 2 + cardH * scale * tilt * 0.25;
+    const y1 = H / 2 + (cardH * scale) / 2;
+    return [
+      { x: W / 2 - far, y: y0 },
+      { x: W / 2 + far, y: y0 },
+      { x: W / 2 + scale / 2, y: y1 },
+      { x: W / 2 - scale / 2, y: y1 },
+    ];
+  };
+
+  /**
+   * The patches have to land on the patches, not merely near them.
+   *
+   * This is the case the four marks cannot vouch for. A homography can be
+   * fitted through any four points, so the marks come out right even when the
+   * map between them is wrong — and everything the profile reads is between
+   * them. Squaring the card up and looking at the wedge is the check that the
+   * whole plane, not just its corners, arrived.
+   */
+  it("reads the patches off the paper, not near it", () => {
+    const drawn = drawCard(W, H, perspective(tilted(0.3)));
+    const rgba = new Uint8ClampedArray(W * H * 4);
+    for (let i = 0; i < W * H; i++) {
+      rgba[i * 4] = rgba[i * 4 + 1] = rgba[i * 4 + 2] = drawn.gray[i];
+      rgba[i * 4 + 3] = 255;
+    }
+    const seen = scanCard(rgba, W, H)!;
+    expect(seen).not.toBeNull();
+    const { w, h } = seen.card.size;
+
+    // Where the black patch's own edges landed, read down its centre column.
+    // Its value at the centre is not the test: a reading half a patch out is
+    // still black in the middle, and half a patch is the difference between
+    // reading the wedge and reading the rules below it.
+    const patch = WEDGE[2].patch;
+    const column = Math.round((patch.x + patch.w / 2) * w);
+    let top = -1;
+    let bottom = -1;
+    for (let y = 0; y < Math.round(0.32 * h); y++) {
+      if (seen.card.gray[y * w + column] < 60) {
+        if (top < 0) top = y;
+        bottom = y;
+      }
+    }
+    expect(top / h).toBeCloseTo(patch.y, 2);
+    expect(bottom / h).toBeCloseTo(patch.y + patch.h, 2);
   });
 });
 

@@ -109,18 +109,30 @@ function card(): SVGSVGElement {
 
     ruler(),
 
+    /*
+     * All the human-readable text lives down here, below the marks.
+     *
+     * Not for looks. A lower-case o is a ring: hollow, round, and — at a
+     * heading's size — large enough to pass the finder's size test. It cannot
+     * displace a real corner mark, which is chosen for being extreme, but it
+     * can offer itself as the fifth ring that decides which way up the card is,
+     * and that one is chosen for being *near a predicted spot*. Keeping every
+     * letterform far from where the key ring is predicted to be leaves the
+     * question with only one plausible answer.
+     */
     s(
       "text",
-      { x: 0.5 * W, y: 0.135 * H, "text-anchor": "middle", "font-size": 7, fill: "#111" },
+      { x: 0.10 * W, y: 0.66 * H, "font-size": 5.5, fill: "#111" },
       "Frosmo calibration card",
     ),
     ...[
-      "Print at 100% on A4, landscape. Check the bar below reads 100 mm.",
+      "Print at 100%, not “fit to page”. Any paper it fits on will do.",
+      "Check the bar below really measures 100 mm.",
       "Lay it flat where you want to play, then tap Scan card.",
     ].map((line, i) =>
       s(
         "text",
-        { x: 0.10 * W, y: (0.65 + i * 0.04) * H, "font-size": 4.4, fill: "#444" },
+        { x: 0.10 * W, y: (0.71 + i * 0.035) * H, "font-size": 4.2, fill: "#444" },
         line,
       ),
     ),
@@ -207,8 +219,10 @@ function slantedEdge(): SVGElement {
  * absolute size does not, and it is what turns board pixels into millimetres.
  */
 function ruler(): SVGElement {
-  const x = 0.10 * W;
-  const y = 0.80 * H;
+  // Kept clear of the two lower rings: a ruler touching one would merge with
+  // it in the ink mask and take a registration mark out of the scan.
+  const x = 0.18 * W;
+  const y = 0.86 * H;
   const ticks: SVGElement[] = [];
   for (let i = 0; i <= 10; i++) {
     const tall = i % 5 === 0;

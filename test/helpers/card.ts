@@ -7,6 +7,26 @@ import {
   CARD_ASPECT, CARD_WIDTH_MM, EDGE, FIDUCIALS, FIDUCIAL_INNER, FIDUCIAL_OUTER, KEY, RULES,
   SWATCHES, TILE, WEDGE,
 } from "../../src/vision/card.js";
+import { applyHomography, solveHomography, type Quad } from "../../src/vision/homography.js";
+
+/**
+ * A `place` that really is a camera looking at a plane.
+ *
+ * Narrowing the far edge by scaling x with a factor linear in y looks like
+ * perspective and is not one: a plane seen by a camera foreshortens in both
+ * directions at once. The difference does not show up in where the four marks
+ * land — a homography can be fitted through any four points — but it shows up
+ * everywhere between them, which is where all the patches are.
+ *
+ * @param corners the card's own four paper corners in the frame, TL TR BR BL.
+ */
+export function perspective(corners: Quad): (u: number, v: number) => { x: number; y: number } {
+  const m = solveHomography(
+    [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }, { x: 0, y: 1 }],
+    corners,
+  );
+  return (u, v) => applyHomography(m, u, v);
+}
 
 export interface Drawn {
   gray: Uint8ClampedArray;
