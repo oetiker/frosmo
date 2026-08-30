@@ -36,7 +36,15 @@ export const GLYPH_SIZE = 24;
  * is what makes tiles printed from this app match the templates it matches
  * against.
  */
-export const GLYPH_FONT_STACK = '"Helvetica Neue", Helvetica, Arial, sans-serif';
+/**
+ * The one typeface the tiles are set in, everywhere.
+ *
+ * Bundled with the app (see the note at the top of styles.css), so the sheet an
+ * iPad prints and the glyphs the trainer renders are the same shapes. The
+ * fallbacks are a courtesy for a browser that somehow failed to load it; a tile
+ * printed in one of them will read worse.
+ */
+export const GLYPH_FONT_STACK = '"Source Code Pro", ui-monospace, "DejaVu Sans Mono", monospace';
 
 /**
  * Crop to the ink, scale to a square, binarise.

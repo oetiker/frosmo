@@ -1,4 +1,35 @@
 /*
+ * The tile typeface is bundled, not borrowed.
+ *
+ * Two reasons, and the second is the one that matters. A stack of system names
+ * resolves to whatever the device happens to have — real Helvetica on an iPad,
+ * an Arial clone on the Linux box where the recogniser is trained — so the
+ * model was learning one set of letterforms and reading another. Bundling one
+ * file ends that: the shapes the trainer sees are the shapes the printer puts
+ * on the paper, byte for byte.
+ *
+ * And it lets the shapes be chosen rather than accepted. Source Code Pro is
+ * drawn for people reading code, where confusing I with 1 with l, or O with 0,
+ * costs somebody an afternoon — so it serifs the I, puts a foot on the 1 and a
+ * dot inside the 0. Those are exactly the characters this app cannot tell
+ * apart, and the reason it cannot is that in Helvetica an I is a plain
+ * upright, which is also what a fragment of a tile's printed border looks
+ * like. No recogniser can separate those two. A serifed I is not a fragment of
+ * anything, so the question stops being asked.
+ *
+ * Subset to the 39 characters the app prints: under four kilobytes.
+ * Source Code Pro, (c) Adobe, SIL Open Font License 1.1 — see LICENSE-fonts.
+ */
+@font-face {
+  font-family: "Source Code Pro";
+  font-weight: 700;
+  font-style: normal;
+  /* Not `swap`: a fallback here would print the wrong letterforms. */
+  font-display: block;
+  src: url("./assets/source-code-pro-700.woff2") format("woff2");
+}
+
+/*
  * One stylesheet, dark, landscape-first.
  *
  * The device is on a stand, at arm's length, with a child's hands in front of
