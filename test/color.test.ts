@@ -15,39 +15,53 @@ describe("rgbToHsv", () => {
 });
 
 describe("classifyColor", () => {
+  const named = (r: number, g: number, b: number, palette?: Parameters<typeof classifyColor>[3]) =>
+    classifyColor(r, g, b, palette ?? {})!;
+
   it("names saturated tokens", () => {
-    expect(classifyColor(220, 30, 30).color).toBe("red");
-    expect(classifyColor(240, 140, 20).color).toBe("orange");
-    expect(classifyColor(40, 170, 60).color).toBe("green");
-    expect(classifyColor(40, 90, 220).color).toBe("blue");
-    expect(classifyColor(140, 60, 200).color).toBe("purple");
+    expect(named(220, 30, 30).color).toBe("red");
+    expect(named(240, 140, 20).color).toBe("orange");
+    expect(named(40, 170, 60).color).toBe("green");
+    expect(named(40, 90, 220).color).toBe("blue");
+    expect(named(140, 60, 200).color).toBe("purple");
   });
 
-  it("separates white, grey and black by brightness, not hue", () => {
-    expect(classifyColor(245, 244, 246).color).toBe("white");
-    expect(classifyColor(120, 122, 118).color).toBe("grey");
-    expect(classifyColor(20, 18, 24).color).toBe("black");
+  it("declines a sample with no colour in it", () => {
+    // Paper, the tiles' own faces, a shadow on the table. Every blob occupancy
+    // finds is asked this question, and under a printed sheet most of them are
+    // the sheet — a classifier obliged to answer calls all of them white, at
+    // high confidence, because they genuinely are.
+    expect(classifyColor(245, 244, 246)).toBeNull();
+    expect(classifyColor(225, 227, 221)).toBeNull(); // measured from the rig
+    expect(classifyColor(120, 122, 118)).toBeNull();
+    expect(classifyColor(20, 18, 24)).toBeNull();
+  });
+
+  it("names them when a caller says it might see them", () => {
+    // They are real colours; they are just never assumed.
+    expect(named(245, 244, 246, { palette: ["red", "white"] }).color).toBe("white");
+    expect(named(120, 122, 118, { palette: ["grey"] }).color).toBe("grey");
+    expect(named(20, 18, 24, { palette: ["black"] }).color).toBe("black");
   });
 
   it("survives the dimming a token gets at the far edge of the play area", () => {
     // Same hue, half the brightness: still the same token colour.
-    expect(classifyColor(110, 15, 15).color).toBe("red");
-    expect(classifyColor(20, 85, 30).color).toBe("green");
+    expect(named(110, 15, 15).color).toBe("red");
+    expect(named(20, 85, 30).color).toBe("green");
   });
 
   it("reports low confidence exactly between two buckets", () => {
-    const between = classifyColor(...hueRgb(42));
+    const between = named(...hueRgb(42));
     expect(["orange", "yellow"]).toContain(between.color);
     expect(between.confidence).toBeLessThan(0.25);
 
-    const dead = classifyColor(...hueRgb(120));
+    const dead = named(...hueRgb(120));
     expect(dead.color).toBe("green");
     expect(dead.confidence).toBeGreaterThan(0.9);
   });
 
   it("restricts to a game's palette when asked", () => {
-    const m = classifyColor(240, 140, 20, { palette: ["red", "blue"] });
-    expect(m.color).toBe("red");
+    expect(named(240, 140, 20, { palette: ["red", "blue"] }).color).toBe("red");
   });
 });
 

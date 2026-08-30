@@ -193,6 +193,59 @@ describe("TileReader", () => {
     expect(reader.read(frame, [blob(0, 100, 60)], { ...permissive, budget: 1 })).toHaveLength(1);
   });
 
+  it("covers every tile on a jittering board, not only the fattest ones", () => {
+    // The failure this exists for, with its real mechanism.
+    //
+    // labelBlobs returns candidates largest first, and ink area is very nearly
+    // a measure of how fat a letter is. Meanwhile a tile's centroid wanders a
+    // few pixels between frames as the mask edges move. Cache the reading
+    // against a grid cell and that wander is a miss every time it crosses a
+    // boundary — so the budget goes on re-reading whatever is at the front of
+    // the queue, which is always M, W and B, and A, I, E, F, T and 1 sit at the
+    // back and are never reached. On the rig that showed up as the board
+    // reporting exactly the two dozen fattest glyphs on the sheet and no others.
+    const reader = new TileReader();
+    const frame = paper();
+    const at: Array<{ cx: number; cy: number }> = [];
+    for (let i = 0; i < 20; i++) {
+      const cx = 20 + (i % 10) * 30;
+      const cy = 40 + Math.floor(i / 10) * 40;
+      stamp(frame, cx, cy);
+      at.push({ cx, cy });
+    }
+
+    const seen = new Set<number>();
+    for (let f = 0; f < 6; f++) {
+      // Three pixels, which is enough to cross a five-pixel cell about half the
+      // time, and nothing a real board does not do.
+      const wobble = [0, 3, -3, 1, -2, 2][f];
+      const blobs = at.map((p, i) => {
+        const b = blob(i, p.cx + wobble, p.cy + (i % 2 ? wobble : -wobble));
+        b.area = 400 - i * 10; // descending, the way the pipeline hands them over
+        return b;
+      });
+      for (const r of reader.read(frame, blobs, { ...permissive, budget: 4 })) {
+        seen.add(at.findIndex((p) => Math.abs(p.cx - r.cx) < 6 && Math.abs(p.cy - r.cy) < 6));
+      }
+    }
+    expect(seen.has(-1)).toBe(false);
+    expect(seen.size).toBe(20);
+  });
+
+  it("keeps hitting the cache while a tile jitters across a cell boundary", () => {
+    const reader = new TileReader();
+    const frame = paper();
+    const at = Array.from({ length: 8 }, (_, i) => 20 + i * 30);
+    for (const cx of at) stamp(frame, cx, 60);
+    const blobs = at.map((cx, i) => blob(i, cx, 60));
+    for (let f = 0; f < 3; f++) reader.read(frame, blobs, { ...permissive, budget: 4 });
+
+    // Everything is known by now. Move each tile three pixels and ask for no
+    // budget at all: every reading has to come from the cache or not at all.
+    const jittered = at.map((cx, i) => blob(i, cx + 3, 60 - 3));
+    expect(reader.read(frame, jittered, { ...permissive, budget: 0 })).toHaveLength(8);
+  });
+
   it("only reports readings it is confident about", () => {
     // The default thresholds exist so a game is told nothing rather than told
     // something wrong; a blank board must produce no letters.

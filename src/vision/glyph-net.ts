@@ -162,10 +162,21 @@ export function readGlyph(sample: Uint8Array, allowed?: string): NetResult | nul
     sum += scores[c];
   }
 
-  let best = 0;
+  /*
+   * Winner and runner-up.
+   *
+   * `best` starts unset rather than at zero. Seeded with zero, the first pass
+   * of the loop compares class 0 against itself, fails, and falls into the
+   * branch that makes it the runner-up as well — so whenever class 0 wins, it
+   * is its own runner-up and the margin comes out as exactly zero. Class 0 is
+   * the letter A, and every caller drops a reading whose margin is below its
+   * threshold, so A was recognised perfectly and thrown away every time. It
+   * was the only character in the alphabet this could happen to.
+   */
+  let best = -1;
   let second = -1;
   for (let c = 0; c < CLASSES; c++) {
-    if (scores[c] > scores[best]) {
+    if (best < 0 || scores[c] > scores[best]) {
       second = best;
       best = c;
     } else if (second < 0 || scores[c] > scores[second]) {
