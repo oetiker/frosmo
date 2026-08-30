@@ -735,8 +735,32 @@ label {
   font-size: 13px;
 }
 
-.cal-card-note:empty {
+.cal-card-note:empty,
+.cal-scan-note:empty {
   display: none;
+}
+
+/*
+ * The scan's answer, next to the button that asked for it.
+ *
+ * The status line at the foot of the sidebar is below the preview and three
+ * more controls, which on a tablet is off the bottom of the screen. A scan that
+ * ran, failed, and said exactly why looked identical to a button that did
+ * nothing at all.
+ */
+.cal-scan-note {
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(125, 159, 232, 0.12);
+  border: 1px solid rgba(125, 159, 232, 0.3);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.cal-scan-note.error {
+  background: rgba(232, 125, 125, 0.12);
+  border-color: rgba(232, 125, 125, 0.35);
 }
 
 @media print {

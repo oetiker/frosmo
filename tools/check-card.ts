@@ -84,6 +84,12 @@ for (let i = 0; i < W * H; i++) {
   for (let c = 0; c < 3; c++) frame[i * 4 + c] = frame[i * 4 + c] * exposure * tint[c];
 }
 
+if (process.env.DUMPFRAME) {
+  const { writeFileSync } = await import("node:fs");
+  writeFileSync(process.env.DUMPFRAME, Buffer.from(frame.buffer));
+  console.log("frame", W, "x", H, "->", process.env.DUMPFRAME);
+}
+
 const seen = scanCard(frame, W, H);
 if (!seen) {
   console.log("NO CARD FOUND");

@@ -23,6 +23,7 @@ import {
   type Orientation,
 } from "../../vision/calibration.js";
 import { describeCameraError, onVideoFrame } from "../../vision/camera.js";
+import { findRings } from "../../vision/card-finder.js";
 import {
   areaFromCorners,
   playAreaMm,
@@ -58,6 +59,27 @@ export function calibrateScreen() {
 
       const orientationLabel = h("span", {}, orientationName(draft.orientation));
       const cardNote = h("div", { class: "cal-caption cal-card-note" }, "");
+      const scanNote = h("div", { class: "cal-scan-note" }, "");
+      /**
+       * The button is the one thing the eye is certainly on when it is pressed.
+       *
+       * Whatever else changes, this does, at the point of the finger. A line of
+       * text elsewhere on the screen is a change nobody is looking at.
+       */
+      const scanButton = h(
+        "button",
+        { class: "primary", onclick: () => scan(app) },
+        "Scan card",
+      ) as HTMLButtonElement;
+      /**
+       * Where the last scan thought it saw ring-shaped marks, over the live
+       * picture, in frame coordinates.
+       *
+       * "Found 3 of the 5 rings" is a number; this is where they were. Which
+       * mark went missing, and what on the table is being taken for one, are
+       * the two questions that follow, and neither can be answered by counting.
+       */
+      let sawRings: Array<{ x: number; y: number; r: number }> = [];
       const aspectPicker = select(
         [
           ["1.333", "4:3 (a sheet of A4 across)"],
@@ -105,9 +127,10 @@ export function calibrateScreen() {
               h(
                 "div",
                 { class: "row" },
-                h("button", { class: "primary", onclick: () => scan(app) }, "Scan card"),
+                scanButton,
                 h("button", { class: "ghost", onclick: () => app.go("card") }, "Print the card"),
               ),
+              scanNote,
               cardNote,
               h("div", { class: "cal-preview-wrap" }, preview, h("span", { class: "cal-caption" }, "What the games will see")),
               h(
@@ -211,35 +234,135 @@ export function calibrateScreen() {
        * work — the player has laid a card down and pressed a button — so there
        * is no reason to look at a half-size image for it.
        */
+      /**
+       * Read the printed card, and let it set everything it can.
+       *
+       * Corners, aspect, orientation and the rig profile all at once, because
+       * they are all measurements of the same photograph and a card that set
+       * only the corners would leave the numbers that actually decide whether a
+       * letter is read at their shipped defaults.
+       *
+       * Every outcome, including the failures, is written next to the button.
+       * The first version put them in the status line at the bottom of the
+       * sidebar, below the preview and three more controls, where on a tablet
+       * it is off the bottom of the screen — so a scan that ran, failed and
+       * said exactly why was indistinguishable from a button that did nothing.
+       */
       const scan = (a: import("../app.js").App) => {
-        const shot = a.camera.capture(1);
+        if (scanButton.disabled) return;
+        scanButton.disabled = true;
+        scanButton.textContent = "Scanning…";
+        sawRings = [];
+        say("Looking for the card…");
+        // Let that paint before the frame is chewed on: everything below is
+        // synchronous, and on a tablet it is long enough to look like a hang.
+        requestAnimationFrame(() =>
+          requestAnimationFrame(() => {
+            try {
+              runScan(a);
+            } finally {
+              scanButton.disabled = false;
+              scanButton.textContent = "Scan card";
+            }
+          }),
+        );
+      };
+
+      const runScan = (a: import("../app.js").App) => {
+        let shot;
+        try {
+          shot = a.camera.capture(scanScale(a));
+        } catch (e) {
+          say(`The camera would not give a frame: ${message(e)}`, true);
+          return;
+        }
         if (!shot) {
-          status.textContent = "No camera frame yet.";
+          say("No camera frame yet — wait for the picture to appear.", true);
           return;
         }
-        const seen = scanCard(shot.data, shot.w, shot.h, { resolution: draft.resolution });
+
+        let seen;
+        try {
+          seen = scanCard(shot.data, shot.w, shot.h, { resolution: draft.resolution });
+        } catch (e) {
+          say(`The scan failed: ${message(e)}`, true);
+          return;
+        }
+
         if (!seen) {
-          status.textContent =
-            "No card found. It needs to lie flat, fully in view, with all five rings unobstructed.";
-          status.classList.add("error");
+          // Say what was actually seen. One ring short and five missing are the
+          // same sentence otherwise, and they want opposite things done.
+          const gray = new Uint8ClampedArray(shot.w * shot.h);
+          for (let i = 0; i < gray.length; i++) {
+            const j = i * 4;
+            gray[i] = (shot.data[j] * 77 + shot.data[j + 1] * 150 + shot.data[j + 2] * 29) >> 8;
+          }
+          const rings = findRings(gray, shot.w, shot.h);
+          sawRings = rings.map((r) => ({
+            x: r.x / shot.w,
+            y: r.y / shot.h,
+            r: r.size / 2 / shot.w,
+          }));
+          /*
+           * Three different situations, and they want different things done.
+           * The count alone is not the story: five marks that refuse to be a
+           * card is a different problem from three marks, and saying "found 5
+           * of the 5 rings" when the scan failed anyway is worse than saying
+           * nothing.
+           */
+          say(
+            rings.length === 0
+              ? "No card in view. It needs to lie flat under the mirror, printed side up."
+              : rings.length < 5
+                ? `Only ${rings.length} of the card's 5 marks are in view, circled on the picture. Move the card fully under the mirror and keep anything off it.`
+                : `${rings.length} round marks in view, circled on the picture, but they do not make a card — one of the five is probably hidden and something else is being taken for it.`,
+            true,
+          );
           return;
         }
-        status.classList.remove("error");
+
+        sawRings = [];
         plane = { m: seen.cardToCamera, frame: { w: shot.w, h: shot.h } };
         Object.assign(draft, seen.calibration, { resolution: draft.resolution });
         orientationLabel.textContent = orientationName(draft.orientation);
         showMeasuredAspect();
         table = null;
         resizePreview();
+        renderCardNote();
 
         const p = seen.profile;
         const grew = seen.area.u1 - seen.area.u0 > 0.9;
-        status.textContent = p.warnings.length
-          ? `Card read, but: ${p.warnings.join("; ")}`
-          : grew
-            ? "Card read, and the board grown out to the edge of the view. Nudge the handles if it reaches past what the mirror covers."
-            : "Card read. The board stops at the card — the view has no room to grow into.";
-        renderCardNote();
+        say(
+          p.warnings.length
+            ? `Card read, but: ${p.warnings.join("; ")}`
+            : grew
+              ? "Card read, and the board grown out to the edge of the view."
+              : "Card read. The board stops at the card — no room to grow into.",
+        );
+      };
+
+      /** Put a line where the eye already is, and in the status line too. */
+      const say = (text: string, bad = false) => {
+        scanNote.textContent = text;
+        scanNote.classList.toggle("error", bad);
+        status.textContent = text;
+        status.classList.toggle("error", bad);
+      };
+
+      const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+      /**
+       * How much of the camera frame to read for a scan.
+       *
+       * Not all of it. A ring is about an eighth of the card across, so it is
+       * tens of pixels wide long before the frame is; reading a 12-megapixel
+       * sensor instead buys nothing and asks for a summed-area table of eight
+       * million doubles on a device that may not have it to spare.
+       */
+      const scanScale = (a: import("../app.js").App) => {
+        const { w, h } = a.camera.size;
+        const long = Math.max(w, h);
+        return long > 1600 ? 1600 / long : 1;
       };
 
       /**
@@ -446,6 +569,7 @@ export function calibrateScreen() {
               draft.corners,
               dragging,
               vw && vh ? letterbox(box.width, box.height, vw / vh) : { x: 0, y: 0, w: box.width, h: box.height },
+              sawRings,
             );
 
             const shot = app.camera.capture(0.5);
@@ -493,6 +617,7 @@ function drawOverlay(
   corners: Quad,
   active: number,
   content: Rect,
+  marks: Array<{ x: number; y: number; r: number }> = [],
 ): void {
   const ctx = canvas.getContext("2d")!;
   const w = canvas.width;
@@ -523,6 +648,25 @@ function drawOverlay(
   for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
   ctx.closePath();
   ctx.stroke();
+
+  /*
+   * What the scan took for a registration mark, when it could not make a card
+   * out of them. Drawn over the picture rather than described in a sentence:
+   * the useful facts are which corner is missing and what else on the table is
+   * round and hollow, and both are things to be looked at.
+   */
+  for (const m of marks) {
+    const x = (content.x + m.x * content.w) * k;
+    const y = (content.y + m.y * content.h) * k;
+    const r = Math.max(8, m.r * content.w * k * 1.6);
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.strokeStyle = "#ffd166";
+    ctx.lineWidth = 3;
+    ctx.setLineDash([6, 5]);
+    ctx.stroke();
+    ctx.setLineDash([]);
+  }
 
   pts.forEach((p, i) => {
     const r = i === active ? 26 : 20;

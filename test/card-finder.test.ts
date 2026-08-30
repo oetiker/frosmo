@@ -6,7 +6,7 @@
  * seen through a mirror, which is what a reflector rig does to everything.
  */
 import { describe, expect, it } from "vitest";
-import { findCard } from "../src/vision/card-finder.js";
+import { findCard, findRings } from "../src/vision/card-finder.js";
 import { CARD_ASPECT } from "../src/vision/card.js";
 import type { Quad } from "../src/vision/homography.js";
 import { drawCard, perspective } from "./helpers/card.js";
@@ -109,5 +109,39 @@ describe("findCard", () => {
     const gray = new Uint8ClampedArray(W * H).fill(200);
     for (let y = 100; y < 300; y++) for (let x = 100; x < 400; x++) gray[y * W + x] = 240;
     expect(findCard(gray, W, H)).toBeNull();
+  });
+});
+
+describe("findRings", () => {
+  /**
+   * A printed swatch is not a mark.
+   *
+   * The adaptive threshold lights only a solid patch's edges — its middle is
+   * not darker than its own neighbourhood — so what reaches the blob finder is
+   * a hollow rectangle of a mark's size, a mark's aspect and very nearly a
+   * mark's fill. On a rendered card it left three extra candidates among the
+   * five real ones. Nothing downstream was actually fooled, because the corner
+   * marks are chosen for being extreme and a swatch sits between them, but the
+   * count is what the calibrate screen shows the player when a scan fails, and
+   * a count that includes furniture is worse than no count.
+   */
+  it("counts the card's five marks and nothing else on it", () => {
+    const card = drawCard(W, H, perspective(tilted(0.2)));
+    expect(findRings(card.gray, W, H)).toHaveLength(5);
+  });
+
+  it("does not take a hollow rectangle for a mark", () => {
+    const gray = new Uint8ClampedArray(W * H).fill(240);
+    // A square outline the size of a registration mark.
+    const x0 = 200, y0 = 150, side = 44, stroke = 5;
+    for (let y = y0; y < y0 + side; y++) {
+      for (let x = x0; x < x0 + side; x++) {
+        const edge =
+          x < x0 + stroke || x >= x0 + side - stroke ||
+          y < y0 + stroke || y >= y0 + side - stroke;
+        if (edge) gray[y * W + x] = 25;
+      }
+    }
+    expect(findRings(gray, W, H)).toHaveLength(0);
   });
 });

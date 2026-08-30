@@ -53,7 +53,7 @@ export interface FindCardOptions {
 /** Fraction of its bounding box an annulus of the card's radii covers. */
 const RING_FILL = (Math.PI / 4) * (1 - (FIDUCIAL_INNER / FIDUCIAL_OUTER) ** 2);
 
-interface Ring {
+export interface Ring {
   x: number;
   y: number;
   size: number;
@@ -65,6 +65,23 @@ export function findCard(
   h: number,
   opts: FindCardOptions = {},
 ): CardSighting | null {
+  return choose(findRings(gray, w, h, opts));
+}
+
+/**
+ * Every ring-shaped mark in the frame, before any of them is believed.
+ *
+ * Split out from `findCard` so a failure can be described instead of merely
+ * reported. "No card found" is the same sentence whether the card is face down
+ * in another room or one ring short because a hand is resting on it, and those
+ * want opposite things from the person holding the tablet.
+ */
+export function findRings(
+  gray: Uint8ClampedArray,
+  w: number,
+  h: number,
+  opts: FindCardOptions = {},
+): Ring[] {
   const short = Math.min(w, h);
   const minRing = (opts.minRing ?? 0.02) * short;
   const maxRing = (opts.maxRing ?? 0.25) * short;
@@ -103,10 +120,43 @@ export function findCard(
       }
     }
     if (!hollow) continue;
+    /*
+     * The corners of the bounding box, which a ring never reaches into and a
+     * rectangle always does.
+     *
+     * Without this a printed colour swatch qualifies. The adaptive threshold
+     * lights only the swatch's edges — its interior is not darker than its own
+     * neighbourhood — so what reaches the blob finder is a hollow rectangle of
+     * a ring's size, a ring's aspect and very nearly a ring's fill. A ring's
+     * ink lies inside its outer circle, and the corner of the box that circle
+     * is inscribed in is 13% of a radius outside it; a rectangle's ink runs
+     * right through. One corner is allowed, for a mark with something touching
+     * it.
+     *
+     * The probe sits near the corner rather than well inside it, and that is
+     * the safe direction on both counts: further out is further clear of a
+     * ring's own ink, and a rectangle's ink runs all the way to the corner
+     * anyway. On one rendered card it took the candidate list from eight marks
+     * to the five that are really there.
+     */
+    const inset = 0.06;
+    let filledCorners = 0;
+    for (const [px, py] of [
+      [b.minX + bw * inset, b.minY + bh * inset],
+      [b.maxX - bw * inset, b.minY + bh * inset],
+      [b.maxX - bw * inset, b.maxY - bh * inset],
+      [b.minX + bw * inset, b.maxY - bh * inset],
+    ]) {
+      const x = Math.round(px);
+      const y = Math.round(py);
+      if (x >= 0 && y >= 0 && x < w && y < h && ink.mask.data[y * w + x]) filledCorners++;
+    }
+    if (filledCorners > 1) continue;
+
     rings.push({ x: cx, y: cy, size: Math.max(bw, bh) });
   }
 
-  return choose(rings);
+  return rings;
 }
 
 /**
