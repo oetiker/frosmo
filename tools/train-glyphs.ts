@@ -552,13 +552,32 @@ function zeroGrads(): void {
   for (const g of grads) g.fill(0);
 }
 
+/**
+ * Largest gradient step allowed, measured as the L2 norm over every parameter.
+ *
+ * Without this the trainer is only stable for the exact shape it was tuned at.
+ * Widening the convolutions was enough to make it collapse in the second epoch:
+ * one oversized step drove the hidden units negative, ReLU passed no gradient
+ * back through them, and the net settled into answering the same class for
+ * every input — a finite loss, near enough ln(37), and nothing to distinguish
+ * it from slow progress except that it never moved again. Clipping the step
+ * costs nothing when the gradients are reasonable and saves the run when one
+ * batch is not.
+ */
+const CLIP = 4;
+
 function applyGrads(lr: number, batch: number, momentum: number): void {
+  let sq = 0;
+  for (const g of grads) for (let i = 0; i < g.length; i++) sq += g[i] * g[i];
+  const norm = Math.sqrt(sq) / batch;
+  const step = (norm > CLIP ? CLIP / norm : 1) * (lr / batch);
+
   for (let p = 0; p < params.length; p++) {
     const w = params[p];
     const g = grads[p];
     const v = vels[p];
     for (let i = 0; i < w.length; i++) {
-      v[i] = momentum * v[i] - (lr / batch) * g[i];
+      v[i] = momentum * v[i] - step * g[i];
       w[i] += v[i];
     }
   }
@@ -676,7 +695,7 @@ for (let epoch = 0; epoch < EPOCHS; epoch++) {
     const j = Math.floor(rnd() * (i + 1));
     [order[i], order[j]] = [order[j], order[i]];
   }
-  const lr = 0.09 * Math.pow(0.87, epoch);
+  const lr = 0.07 * Math.pow(0.88, epoch);
   let loss = 0;
   zeroGrads();
   for (let k = 0; k < order.length; k++) {
@@ -692,6 +711,13 @@ for (let epoch = 0; epoch < EPOCHS; epoch++) {
     process.exit(1);
   }
   const { acc } = accuracy(val, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+  // Collapse is not divergence: the loss stays finite, sits near ln(CLASSES),
+  // and the net answers one class for everything. Nothing later in the run
+  // recovers from it, so there is no point spending twenty more minutes on it.
+  if (epoch > 0 && acc === 0) {
+    console.error("training collapsed — every input is being given the same class");
+    process.exit(1);
+  }
   console.log(
     `epoch ${String(epoch + 1).padStart(2)}  lr ${lr.toFixed(4)}  loss ${(loss / order.length).toFixed(4)}  letters ${(acc * 100).toFixed(2)}%`,
   );
