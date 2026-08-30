@@ -44,7 +44,7 @@ export const GLYPH_SIZE = 24;
  * fallbacks are a courtesy for a browser that somehow failed to load it; a tile
  * printed in one of them will read worse.
  */
-export const GLYPH_FONT_STACK = '"Atkinson Hyperlegible", "Source Code Pro", ui-monospace, monospace';
+export const GLYPH_FONT_STACK = '"Atkinson Hyperlegible Next", "Atkinson Hyperlegible", ui-monospace, monospace';
 
 /**
  * Crop to the ink, scale to a square, binarise.

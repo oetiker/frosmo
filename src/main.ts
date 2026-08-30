@@ -3,6 +3,7 @@ import "./styles.css";
 import { App } from "./app/app.js";
 import { aboutScreen } from "./app/screens/about.js";
 import { calibrateScreen } from "./app/screens/calibrate.js";
+import { cardScreen } from "./app/screens/card.js";
 import { homeScreen } from "./app/screens/home.js";
 import { labScreen } from "./app/screens/lab.js";
 import { playScreen } from "./app/screens/play.js";
@@ -17,6 +18,7 @@ app.register("calibrate", () => calibrateScreen());
 app.register("play", (arg) => playScreen(arg));
 app.register("lab", () => labScreen());
 app.register("print", () => printScreen());
+app.register("card", () => cardScreen());
 app.register("about", () => aboutScreen());
 
 const start = app.initialScreen();

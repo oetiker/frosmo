@@ -15,16 +15,20 @@
  * separates it from a letter, so it is worth keeping the difference wide.
  */
 
+import { SWATCHES } from "../../vision/card.js";
 import { DEFAULT_DIGITS, DEFAULT_LETTERS, GLYPH_FONT_STACK } from "../../vision/glyph.js";
 import { h, s } from "../../util/dom.js";
 import type { App, Screen } from "../app.js";
 
-const TOKEN_COLORS = [
-  ["Red", "#d93025"],
-  ["Orange", "#f2b705"],
-  ["Green", "#1e9e4a"],
-  ["Blue", "#1a63d8"],
-];
+/*
+ * The token inks, taken from the calibration card rather than repeated here.
+ *
+ * They were two lists until now, and the two had drifted: the card's red was
+ * #d7263d and the printed token's #d93025. That is not a cosmetic difference —
+ * the card exists to tell the app what these inks look like through this
+ * camera, and a swatch of a colour nobody prints tells it nothing.
+ */
+const TOKEN_COLORS = SWATCHES.map((s) => [s.name[0].toUpperCase() + s.name.slice(1), s.css]);
 
 export function printScreen(): Screen {
   return {
@@ -47,6 +51,13 @@ export function printScreen(): Screen {
           h(
             "div",
             { class: "scroll" },
+            h(
+              "p",
+              { class: "no-print note" },
+              "There is also a ",
+              h("a", { href: "#/card", onclick: (e: Event) => { e.preventDefault(); app.go("card"); } }, "calibration card"),
+              " — one sheet that sets up the camera for your rig, so nothing has to be tuned by hand.",
+            ),
             h(
               "p",
               { class: "no-print note" },

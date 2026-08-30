@@ -23,6 +23,12 @@ import {
   type Orientation,
 } from "../../vision/calibration.js";
 import { describeCameraError, onVideoFrame } from "../../vision/camera.js";
+import {
+  areaFromCorners,
+  playAreaMm,
+  scanCard,
+} from "../../vision/card-scan.js";
+import type { Mat3 } from "../../vision/homography.js";
 import { describeCamera, watchCameras, type CameraChoice } from "../../vision/cameras.js";
 import type { Quad } from "../../vision/homography.js";
 import { createRectifiedFrame, buildSampleTable, rectify } from "../../vision/rectify.js";
@@ -51,6 +57,20 @@ export function calibrateScreen() {
       const cameraPicker = h("div", { class: "cal-camera" }, h("span", { class: "cal-caption" }, "…"));
 
       const orientationLabel = h("span", {}, orientationName(draft.orientation));
+      const cardNote = h("div", { class: "cal-caption cal-card-note" }, "");
+      const aspectPicker = select(
+        [
+          ["1.333", "4:3 (a sheet of A4 across)"],
+          ["1.5", "3:2"],
+          ["1.777", "16:9 (wide)"],
+          ["1", "Square"],
+        ],
+        String(round3(draft.aspect)),
+        (v) => {
+          draft.aspect = Number(v);
+          resizePreview();
+        },
+      );
 
       const stage = h("div", { class: "cal-stage" }, video, overlay);
 
@@ -77,11 +97,18 @@ export function calibrateScreen() {
                 { class: "steps" },
                 h("li", {}, "Clip the mirror over the camera so it looks at the table."),
                 h("li", {}, "Pick the camera that faces the table, if there is more than one."),
-                h("li", {}, "Drag the four handles onto the corners of the play area."),
+                h("li", {}, "Lay the printed card where you want to play and scan it — or drag the four handles yourself."),
                 h("li", {}, "Check the preview looks like your table, right way round."),
-                h("li", {}, "Clear the table, then learn the empty board."),
+                h("li", {}, "Take the card away, clear the table, then learn the empty board."),
               ),
               h("div", { class: "row" }, h("label", {}, "Camera"), cameraPicker),
+              h(
+                "div",
+                { class: "row" },
+                h("button", { class: "primary", onclick: () => scan(app) }, "Scan card"),
+                h("button", { class: "ghost", onclick: () => app.go("card") }, "Print the card"),
+              ),
+              cardNote,
               h("div", { class: "cal-preview-wrap" }, preview, h("span", { class: "cal-caption" }, "What the games will see")),
               h(
                 "div",
@@ -94,19 +121,7 @@ export function calibrateScreen() {
                 "div",
                 { class: "row" },
                 h("label", {}, "Play area shape"),
-                select(
-                  [
-                    ["1.333", "4:3 (a sheet of A4 across)"],
-                    ["1.5", "3:2"],
-                    ["1.777", "16:9 (wide)"],
-                    ["1", "Square"],
-                  ],
-                  String(round3(draft.aspect)),
-                  (v) => {
-                    draft.aspect = Number(v);
-                    resizePreview();
-                  },
-                ),
+                aspectPicker,
               ),
               h(
                 "div",
@@ -148,6 +163,14 @@ export function calibrateScreen() {
       );
 
       let frame = createRectifiedFrame(boardSize(draft));
+      /**
+       * The plane the card established, kept for as long as this screen lives.
+       *
+       * The card can be taken away the moment it has been scanned; the surface
+       * it was lying on has not moved, so the homography still describes it.
+       * That is what lets a dragged handle stay measured in millimetres.
+       */
+      let plane: { m: Mat3; frame: { w: number; h: number } } | null = null;
       let table: Int32Array | null = null;
       let tableFor = { w: 0, h: 0 };
 
@@ -174,6 +197,105 @@ export function calibrateScreen() {
       const reset = () => {
         draft.corners = defaultCalibration().corners;
         table = null;
+      };
+
+      /**
+       * Read the printed card, and let it set everything it can.
+       *
+       * Corners, aspect, orientation and the rig profile all at once, because
+       * they are all measurements of the same photograph and a card that set
+       * only the corners would leave the numbers that actually decide whether a
+       * letter is read at their shipped defaults.
+       *
+       * A single frame, at full capture resolution. Nothing here is per-frame
+       * work — the player has laid a card down and pressed a button — so there
+       * is no reason to look at a half-size image for it.
+       */
+      const scan = (a: import("../app.js").App) => {
+        const shot = a.camera.capture(1);
+        if (!shot) {
+          status.textContent = "No camera frame yet.";
+          return;
+        }
+        const seen = scanCard(shot.data, shot.w, shot.h, { resolution: draft.resolution });
+        if (!seen) {
+          status.textContent =
+            "No card found. It needs to lie flat, fully in view, with all five rings unobstructed.";
+          status.classList.add("error");
+          return;
+        }
+        status.classList.remove("error");
+        plane = { m: seen.cardToCamera, frame: { w: shot.w, h: shot.h } };
+        Object.assign(draft, seen.calibration, { resolution: draft.resolution });
+        orientationLabel.textContent = orientationName(draft.orientation);
+        showMeasuredAspect();
+        table = null;
+        resizePreview();
+
+        const p = seen.profile;
+        const grew = seen.area.u1 - seen.area.u0 > 0.9;
+        status.textContent = p.warnings.length
+          ? `Card read, but: ${p.warnings.join("; ")}`
+          : grew
+            ? "Card read, and the board grown out to the edge of the view. Nudge the handles if it reaches past what the mirror covers."
+            : "Card read. The board stops at the card — the view has no room to grow into.";
+        renderCardNote();
+      };
+
+      /**
+       * Offer the measured shape in the picker, rather than the nearest preset.
+       *
+       * The board grown out from the card has whatever aspect the camera's view
+       * allowed; rounding it to 4:3 would throw away the one thing the scan
+       * actually established.
+       */
+      const showMeasuredAspect = () => {
+        const mm = draft.playAreaMm;
+        if (!mm) return;
+        const value = String(round3(draft.aspect));
+        const label = `Measured — ${Math.round(mm.w)} × ${Math.round(mm.h)} mm`;
+        const first = aspectPicker.options[0];
+        if (first?.dataset.measured) {
+          first.value = value;
+          first.textContent = label;
+        } else {
+          const option = h("option", { value }, label);
+          option.dataset.measured = "1";
+          aspectPicker.prepend(option);
+        }
+        aspectPicker.value = value;
+      };
+
+      const renderCardNote = () => {
+        const p = draft.profile;
+        const mm = draft.playAreaMm;
+        cardNote.textContent = !p
+          ? ""
+          : [
+              mm ? `${Math.round(mm.w)} × ${Math.round(mm.h)} mm` : null,
+              `ink ${p.ink.contrast.toFixed(2)}`,
+              `blur ${p.blur.toFixed(1)} px`,
+            ]
+              .filter(Boolean)
+              .join(" · ");
+      };
+
+      /**
+       * Re-derive the physical size after the handles have been moved.
+       *
+       * Without this a drag would leave `playAreaMm` describing the rectangle
+       * the card grew to, not the one now on screen — a wrong measurement,
+       * which is worse than none, because the tile finder believes it.
+       */
+      const remeasure = () => {
+        if (!plane || !draft.playAreaMm) return;
+        const pixels = cornersToPixels(draft, plane.frame.w, plane.frame.h);
+        const mm = playAreaMm(areaFromCorners(pixels, plane.m));
+        draft.playAreaMm = mm;
+        draft.aspect = mm.w / mm.h;
+        showMeasuredAspect();
+        resizePreview();
+        renderCardNote();
       };
 
       const save = (a: import("../app.js").App) => {
@@ -242,6 +364,7 @@ export function calibrateScreen() {
         // handle out from under the finger.
         const ordered = normaliseCorners(cornersToPixels(draft, 1000, 1000), 1000, 1000);
         if (ordered) draft.corners = ordered;
+        remeasure();
         table = null;
       };
       overlay.addEventListener("pointerup", endDrag);

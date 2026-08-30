@@ -1,8 +1,7 @@
-The tile typeface bundled at src/assets/atkinson-hyperlegible-700.woff2 is a
-subset of
+The tile typeface bundled at src/assets/atkinson-next-500.woff2 is a subset of
 
-    Atkinson Hyperlegible
-    Copyright 2020 Braille Institute of America, Inc.
+    Atkinson Hyperlegible Next
+    Copyright Braille Institute of America, Inc.
 
 licensed under the SIL Open Font License, Version 1.1, the full text of which is
 available at https://openfontlicense.org and alongside the font at
@@ -12,6 +11,12 @@ It is drawn to make characters hard to confuse with one another — a serifed I,
 foot on the 1, a mark through the 0 — which is why this app uses it: those are
 exactly the characters a camera cannot otherwise separate from a fragment of a
 tile's printed border.
+
+Weight 500 rather than 700, and that is measured rather than taste. At the size
+the recogniser sees, 700 closes the counters — the hole in an A comes out eight
+pixels across, in an 8 sixteen — and those holes are what separate H from N and
+O from D. 500 keeps nearly all of the light weight's counter area with enough
+stroke to survive the downsampling.
 
 The font is subset to the 39 characters this app prints on its tile sheet and is
 distributed under the terms of that licence, separately from the MIT licence
