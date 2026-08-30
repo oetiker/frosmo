@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { Blob } from "../src/vision/blobs.js";
+import type { Candidate } from "../src/vision/tile-reader.js";
 import { createRectifiedFrame, type RectifiedFrame } from "../src/vision/rectify.js";
 import { TileReader } from "../src/vision/tile-reader.js";
 import fixture from "./fixtures/rig-candidates.json";
@@ -56,29 +56,15 @@ function stamp(f: RectifiedFrame, cx: number, cy: number): void {
   }
 }
 
-/** A blob the shape filter accepts, matching what stamp() paints. */
-function blob(id: number, cx: number, cy: number): Blob {
-  return {
-    id,
-    area: Math.round(BW * BH * 0.5),
-    cx,
-    cy,
-    minX: Math.round(cx - BW / 2),
-    minY: Math.round(cy - BH / 2),
-    maxX: Math.round(cx - BW / 2) + BW - 1,
-    maxY: Math.round(cy - BH / 2) + BH - 1,
-    r: 0,
-    g: 0,
-    b: 0,
-    angle: 0,
-    elongation: 1.2,
-  };
+/** A candidate covering what stamp() painted. */
+function blob(id: number, cx: number, cy: number): Candidate & { id: number; area: number } {
+  return { id, area: Math.round(BW * BH * 0.5), cx, cy, side: Math.max(BW, BH) * 1.3 };
 }
 
 /** n tiles in a row, far enough apart that no crop reaches its neighbour. */
-function row(n: number): { frame: RectifiedFrame; blobs: Blob[] } {
+function row(n: number): { frame: RectifiedFrame; blobs: ReturnType<typeof blob>[] } {
   const frame = paper();
-  const blobs: Blob[] = [];
+  const blobs: ReturnType<typeof blob>[] = [];
   for (let i = 0; i < n; i++) {
     const cx = 20 + i * 30;
     stamp(frame, cx, 60);
@@ -139,15 +125,6 @@ describe("TileReader", () => {
     expect(reader.read(frame, [blob(0, 240, 180)], { ...permissive, budget: 1 })).toHaveLength(1);
   });
 
-  it("ignores blobs that are not glyph-shaped", () => {
-    const { frame } = row(1);
-    const wide = blob(0, 100, 60);
-    wide.minX = 10;
-    wide.maxX = 200;
-    wide.area = 400;
-    expect(new TileReader().read(frame, [wide], { ...permissive, budget: 4 })).toHaveLength(0);
-  });
-
   it("forgets everything on reset", () => {
     const reader = new TileReader();
     const { frame, blobs } = row(3);
@@ -181,12 +158,9 @@ describe("TileReader", () => {
     const reader = new TileReader();
     // Smaller than a tile but still glyph-shaped, so the shape filter passes it
     // on and the refusal is the model's, not the filter's.
+    // Smaller than a tile, so laying one down is a change in size.
     const speck = blob(0, 100, 60);
-    speck.minX += 3;
-    speck.maxX -= 3;
-    speck.minY += 2;
-    speck.maxY -= 2;
-    speck.area = 80;
+    speck.side = Math.max(BW, BH) * 0.8;
     expect(reader.read(frame, [speck], { ...permissive, budget: 1 })).toHaveLength(0);
 
     stamp(frame, 100, 60);

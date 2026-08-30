@@ -40,6 +40,9 @@ const BASE = JSON.parse(readFileSync(".glyphs/base.json", "utf8")) as {
 };
 
 const CHARS = [...BASE.chars];
+/** The atlas is letters then digits, so this splits it without a second list. */
+const LETTERS = BASE.chars.replace(/[0-9]/g, "");
+const DIGITS = BASE.chars.replace(/[^0-9]/g, "");
 /**
  * One class beyond the alphabet: "this is not a character".
  *
@@ -710,7 +713,7 @@ for (let epoch = 0; epoch < EPOCHS; epoch++) {
     console.error("training diverged — lower the learning rate");
     process.exit(1);
   }
-  const { acc } = accuracy(val, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+  const { acc } = accuracy(val, LETTERS);
   // Collapse is not divergence: the loss stays finite, sits near ln(CLASSES),
   // and the net answers one class for everything. Nothing later in the run
   // recovers from it, so there is no point spending twenty more minutes on it.
@@ -723,14 +726,12 @@ for (let epoch = 0; epoch < EPOCHS; epoch++) {
   );
 }
 
-const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-const DIGITS = "0123456789";
 const all = accuracy(val);
 const letters = accuracy(val, LETTERS);
 const digits = accuracy(val, DIGITS);
 
 console.log(`\nvalidation accuracy`);
-console.log(`  all 36 characters   ${(all.acc * 100).toFixed(2)}%`);
+console.log(`  all ${CHARS.length} characters   ${(all.acc * 100).toFixed(2)}%`);
 console.log(`  letters only        ${(letters.acc * 100).toFixed(2)}%   ← what Spell It sees`);
 console.log(`  digits only         ${(digits.acc * 100).toFixed(2)}%`);
 console.log("\nworst confusions, letters:", letters.worst.map(([a, b, n]) => `${a}→${b} ×${n}`).join("  ") || "none");

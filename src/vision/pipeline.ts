@@ -19,11 +19,12 @@ import { IDENTITY_GAIN } from "./photometry.js";
 import { simplify, traceContours, type Contour } from "./contour.js";
 import { InkDetector } from "./ink.js";
 import { VideoCropSource } from "./native-crop.js";
+import { INTERIOR, TileFinder } from "./tile-finder.js";
 import { blurToField, createMask, type Mask } from "./mask.js";
 import { OccupancyDetector } from "./occupancy.js";
 import { buildSampleTable, createRectifiedFrame, rectify, type BoardSize, type RectifiedFrame } from "./rectify.js";
-import { glyphMinArea } from "./tiles.js";
-import { TileReader, type TileReading } from "./tile-reader.js";
+import { glyphCandidate, glyphLimits, glyphMinArea } from "./tiles.js";
+import { TileReader, type Candidate, type TileReading } from "./tile-reader.js";
 
 export interface VisionNeeds {
   /** The covered-pixel mask. Nearly everything wants this. */
@@ -124,6 +125,7 @@ export class VisionPipeline {
   private contourScratch: Uint8Array | null = null;
   private readonly tileReader = new TileReader();
   private cropSource: VideoCropSource | null = null;
+  private tileFinder: TileFinder | null = null;
   private cropSourceFor = { w: 0, h: 0 };
   private needs: VisionNeeds = { occupancy: true };
   private learning = 0;
@@ -333,28 +335,51 @@ export class VisionPipeline {
     t.blobs = performance.now() - mark;
 
     mark = performance.now();
-    // Glyphs are labelled from the ink mask, with their own minimum area.
-    //
-    // Not from occupancy, and not with the token minimum. A printed tile on a
-    // white sheet is not an object on the table — occupancy sees only the
-    // colour discs there, and handing those to the recogniser is why every tile
-    // used to read as "M". And the general blob minimum is tuned for tokens:
-    // several times too large for a letter, which would discard most of them
-    // before they were ever looked at.
+    /*
+     * Where to look for glyphs.
+     *
+     * The tiles themselves, when they can be found. A tile's printed frame is a
+     * closed loop in the ink mask, so its interior is a hole the finder can
+     * pick out — and once the tile is known, everything inside it is the glyph.
+     * That is what makes an umlaut readable at all: its two dots are separate
+     * components, and a blob finder drops them for being too small and hands
+     * over a bare A.
+     *
+     * Blobs of ink are the fallback, for tiles with no frame to find — Osmo's
+     * own, or Scrabble. They cost the reject class its job back, because a
+     * fragment of border then competes with the letter beside it.
+     */
+    const candidates: Candidate[] = [];
+    let fromTiles = false;
+    if (this.needs.tiles) {
+      this.tileFinder ??= new TileFinder(this.board.w, this.board.h);
+      const found = this.tileFinder.find(inkDetector.mask, {
+        scratch: this.labelScratch ?? undefined,
+      });
+      for (const tile of found) {
+        candidates.push({ cx: tile.cx, cy: tile.cy, side: Math.min(tile.w, tile.h) * INTERIOR });
+      }
+      fromTiles = found.length > 0;
+      if (!found.length) {
+        const limits = glyphLimits(this.board.w, this.board.h);
+        for (const blob of labelBlobs(inkDetector.mask, {
+          minArea: glyphMinArea(this.board.w, this.board.h),
+          limit: 96,
+          scratch: this.labelScratch ?? undefined,
+        }).blobs) {
+          if (glyphCandidate(blob, limits) !== "ok") continue;
+          const side = Math.max(blob.maxX - blob.minX + 1, blob.maxY - blob.minY + 1) * 1.3;
+          candidates.push({ cx: blob.cx, cy: blob.cy, side });
+        }
+      }
+    }
     const tiles = this.needs.tiles
-      ? this.tileReader.read(
-          frame,
-          labelBlobs(inkDetector.mask, {
-            minArea: glyphMinArea(this.board.w, this.board.h),
-            limit: 96,
-            scratch: this.labelScratch ?? undefined,
-          }).blobs,
-          {
-            alphabet: this.needs.alphabet,
-            source: this.tileCropSource(cal) ?? undefined,
-            rotationFallback: true,
-          },
-        )
+      ? this.tileReader.read(frame, candidates, {
+          fromTiles,
+          alphabet: this.needs.alphabet,
+          source: this.tileCropSource(cal) ?? undefined,
+          rotationFallback: true,
+        })
       : [];
     t.tiles = performance.now() - mark;
 

@@ -10,13 +10,18 @@
  *   node tools/render-glyphs.mjs
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
 
 const OUT = resolve(".glyphs");
 const SIZE = 64;
-const CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+// Read from the app rather than repeated here: a renderer that disagrees with
+// the alphabet trains the model to read a set the app never asks for.
+const glyphSource = readFileSync(resolve("src/vision/glyph.ts"), "utf8");
+const pick = (name) => glyphSource.match(new RegExp(`${name} = "([^"]+)"`))?.[1];
+const CHARS = `${pick("DEFAULT_LETTERS")}${pick("DEFAULT_DIGITS")}`;
+if (CHARS.length < 36) throw new Error(`could not read the alphabet from glyph.ts (got "${CHARS}")`);
 const FONT_STACK = '"Helvetica Neue", Helvetica, Arial, sans-serif';
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });

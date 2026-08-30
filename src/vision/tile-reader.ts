@@ -14,12 +14,24 @@
  * anyway.
  */
 
-import type { Blob } from "./blobs.js";
 import { readGlyph } from "./glyph-net.js";
 import { GLYPH_SIZE, normaliseGlyph } from "./glyph.js";
 import type { RectifiedFrame } from "./rectify.js";
 import type { CropSource } from "./native-crop.js";
-import { glyphCandidate, glyphLimits, type GlyphLimits } from "./tiles.js";
+
+/**
+ * Somewhere on the board worth reading a glyph out of.
+ *
+ * Deliberately not a blob. Choosing what to look at is the caller's job, and it
+ * has two ways to do it — the tiles themselves, which is much the better one,
+ * or blobs of ink for tiles that have no frame to find. See tile-finder.ts.
+ */
+export interface Candidate {
+  cx: number;
+  cy: number;
+  /** Side of the square to crop, in board pixels. */
+  side: number;
+}
 
 /** Oversampling factor for the crop, so normalisation has detail to work with. */
 const CROP = GLYPH_SIZE * 2;
@@ -47,13 +59,17 @@ export interface TileReading {
 }
 
 export interface ReaderOptions {
-  limits?: Partial<GlyphLimits>;
   /** Characters this game uses. Restricting is worth several percent of accuracy. */
   alphabet?: string;
   /** Reject readings less confident than this. */
   minConfidence?: number;
   /** Reject readings this close to their runner-up. */
   minMargin?: number;
+  /**
+   * The candidates came from inside a tile, so ink reaching the edge of a crop
+   * is somebody else's frame and must not widen the glyph's bounding box.
+   */
+  fromTiles?: boolean;
   /** How many new candidates to recognise per frame. */
   budget?: number;
   /** Where to take crops from; falls back to the rectified board. */
@@ -146,8 +162,7 @@ export class TileReader {
     return best;
   }
 
-  read(frame: RectifiedFrame, blobs: Blob[], opts: ReaderOptions = {}): TileReading[] {
-    const limits: GlyphLimits = { ...glyphLimits(frame.size.w, frame.size.h), ...opts.limits };
+  read(frame: RectifiedFrame, candidates: Candidate[], opts: ReaderOptions = {}): TileReading[] {
     const minConfidence = opts.minConfidence ?? 0.45;
     const minMargin = opts.minMargin ?? 0.12;
     const budget = opts.budget ?? 4;
@@ -156,11 +171,9 @@ export class TileReader {
     const out: TileReading[] = [];
 
     // Pass one: report everything already known, and collect what is not.
-    const unknown: Array<{ blob: Blob; side: number }> = [];
-    for (const blob of blobs) {
-      if (glyphCandidate(blob, limits) !== "ok") continue;
-
-      const side = Math.max(blob.maxX - blob.minX + 1, blob.maxY - blob.minY + 1) * 1.3;
+    const unknown: Candidate[] = [];
+    for (const blob of candidates) {
+      const side = blob.side;
       const hit = this.find(blob.cx, blob.cy, side);
       if (hit) {
         hit.lastSeen = now;
@@ -176,7 +189,7 @@ export class TileReader {
         if (!grew && now < hit.recheck) continue;
         this.cache.splice(this.cache.indexOf(hit), 1);
       }
-      unknown.push({ blob, side });
+      unknown.push(blob);
     }
 
     /*
@@ -193,7 +206,8 @@ export class TileReader {
      */
     if (this.cursor >= unknown.length) this.cursor = 0;
     for (let n = 0; n < unknown.length && n < budget; n++) {
-      const { blob, side } = unknown[(this.cursor + n) % unknown.length];
+      const blob = unknown[(this.cursor + n) % unknown.length];
+      const side = blob.side;
       const refuse = () =>
         this.cache.push({
           reading: null,
@@ -208,7 +222,7 @@ export class TileReader {
         sampleUpright(frame, blob.cx, blob.cy, side, crop, CROP);
       }
 
-      const normalised = normaliseGlyph(crop, CROP, CROP);
+      const normalised = normaliseGlyph(crop, CROP, CROP, { dropEdgeTouching: opts.fromTiles });
 
       // The amount of ink, before the model is asked. Cheaper than inference,
       // and it takes out the two cases the model has least to say about: a
