@@ -65,11 +65,6 @@ export interface ReaderOptions {
   minConfidence?: number;
   /** Reject readings this close to their runner-up. */
   minMargin?: number;
-  /**
-   * The candidates came from inside a tile, so ink reaching the edge of a crop
-   * is somebody else's frame and must not widen the glyph's bounding box.
-   */
-  fromTiles?: boolean;
   /** How many new candidates to recognise per frame. */
   budget?: number;
   /** Where to take crops from; falls back to the rectified board. */
@@ -222,7 +217,17 @@ export class TileReader {
         sampleUpright(frame, blob.cx, blob.cy, side, crop, CROP);
       }
 
-      const normalised = normaliseGlyph(crop, CROP, CROP, { dropEdgeTouching: opts.fromTiles });
+      /*
+       * Ink reaching the edge of the crop is somebody else's — a neighbouring
+       * tile's frame, most often — and it has to go before the bounding box is
+       * taken, or the glyph is scaled down to sit beside it.
+       *
+       * Unconditional, and that matters more than it looks. The trainer
+       * normalises its samples the same way, so this is the one distribution
+       * the model has ever seen; making it depend on which path found the
+       * candidate would hand the other path a model trained for something else.
+       */
+      const normalised = normaliseGlyph(crop, CROP, CROP, { dropEdgeTouching: true });
 
       // The amount of ink, before the model is asked. Cheaper than inference,
       // and it takes out the two cases the model has least to say about: a
