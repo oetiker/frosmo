@@ -27,7 +27,7 @@ Four detectors, each computed only when a game asks for it:
 | **occupancy** | anything opaque on the table | Silhouette, Bounce |
 | **ink** | pen strokes on light paper | Bounce |
 | **tokens** | coloured pieces, sorted into eight colours | Colour Rush |
-| **tiles** | printed letters and digits | Spell It |
+| **tiles** | printed letters and digits, read by a small CNN | Spell It |
 
 ## The games
 
@@ -111,17 +111,93 @@ tested it against.
 ## Making pieces
 
 **Print tiles** in the app produces letter tiles and colour tokens on plain
-paper. The tiles are set in the same typeface the recogniser's templates are
-rendered in, so tiles printed from the app are the best case for recognition;
-Osmo's own tiles, Scrabble tiles and handwriting degrade from there. Glue the
-sheet to card — floppy paper curls and casts shadows the camera reads as marks.
+paper. The tiles are set in the typeface the recogniser was trained on, so tiles
+printed from the app are the best case for recognition; Osmo's own tiles,
+Scrabble tiles and handwriting degrade from there. Glue the sheet to card —
+floppy paper curls and casts shadows the camera reads as marks.
+
+## Reading letters
+
+The letters are read by a small convolutional net that ships inside the bundle:
+24×24 input, two convolution-and-pool stages, one fully connected layer, 37
+outputs. Weights are quantised to int8, which is why the whole recogniser is
+118 KB of the source and 41 KB of the download, and needs no fetch at play
+time. It reads letters at 95.0% and digits at 93.5% on held-out data.
+
+It is trained offline, on this machine, from the glyphs rendered by the browser
+itself — every sample is one of those glyphs pushed through the degradations a
+tablet camera actually applies: perspective, rotation, blur, uneven fill,
+contrast collapse, sensor noise, and a neighbouring tile intruding at the
+border. That is the whole training set; there is no corpus to download.
+
+### Saying no
+
+There is a thirty-seventh class: *none of these*.
+
+It is the difference between working and not. Photograph the app's own printout
+on a real table and the blob finder hands the recogniser thirty-six candidates,
+of which thirteen are characters. The rest are fragments of the tiles' printed
+borders, the facing edges of two tiles side by side, the rims and bodies of the
+colour tokens, and print speckle — all of them glyph-sized and glyph-shaped, so
+no shape filter removes them. A net that knows only 36 characters is *obliged*
+to name every one, and does so at full confidence, honestly: of 36 letters, a
+vertical bar really is most like an L. No threshold recovers from that. On that
+capture the 36-class model turned all twenty-three into letters. This one
+refuses twenty-two of them.
+
+It is trained on synthetic junk alongside the letters — blank paper, filled
+discs, parallel stroke pairs, speckle, shallow arcs, thin frames, slanted bars —
+under the same camera degradation, so it cannot separate the classes on image
+quality instead of on shape.
+
+Which junk gets drawn is the whole game, and getting it wrong is expensive. The
+first model trained this way lost twelve points of letter accuracy, and the
+trainer's confusion table named the casualties: `J T I G O U D L`, every one of
+them lost to *reject* rather than to another letter, and every one of them a
+shape the synthetic junk was drawing. A bar is an `I`. A frame corner is an `L`.
+A ring is an `O` and three-quarters of one is a `C`. Two crossing strokes are an
+`X`. So the families that no letter makes — blank paper, filled discs, parallel
+pairs, speckle — carry the weight, arcs are shallow segments rather than rings,
+crossing strokes are gone, and structural lines are always drawn thinner than a
+glyph stroke ever gets, which is true of the printout too. Drawn that way,
+refusal costs 0.2% of letters instead of 6.7%.
+
+Two shapes still cannot be taught away, because they *are* letters: an upright
+stroke and a letter `I` are the same bitmap once the crop is normalised. One
+border fragment on the capture is still read as an `I`, and that is the right
+trade — refusing it would cost every real `I` on the sheet. What separates them
+is context, and context is not available at this layer.
+
+`test/rig-capture.test.ts` holds every candidate from that capture,
+hand-labelled, as bitmaps rather than the photograph. It is the only test here
+that grades the model on something nobody synthesised.
+
+```sh
+npm run glyphs:render   # Chromium renders the 36 glyphs → .glyphs/base.json
+npm run glyphs:train    # trains, checks gradients, writes src/vision/glyph-model.json
+```
+
+Two things do most of the work at play time. A game says which characters can
+possibly appear — Spell It only ever wants letters — and that restriction is
+applied to the scores *before* the winner is picked, not as a filter afterwards,
+so `D` can never lose to `0`. Refusal is exempt from it: a game narrowing the
+answer to letters is saying which letters it might see, not promising that what
+it is shown is one.
+
+And each glyph is read once and then cached against its position, because a tile
+that has not moved cannot have changed its mind. Refusals are cached the same
+way, and that is not an optimisation — junk outnumbers letters on a real sheet
+two to one, so without it the per-frame budget is spent entirely on rejecting
+the same fragments over and over and the letters behind them are never reached
+at all. A refusal is reopened when its blob changes size, which is what happens
+when something is actually put down there.
 
 ## Development
 
 ```sh
 npm install
 npm run dev          # http://localhost:5173 — camera works on localhost
-npm test             # 118 unit tests, no browser needed
+npm test             # unit tests, no browser needed
 npm run typecheck
 npm run build        # static dist/, plus a service worker built from it
 ```
@@ -152,7 +228,7 @@ src/vision/     camera, homography, calibration, rectification, the detectors
 src/engine/     ball physics, field sampling, polygon rasterisation
 src/games/      one file per game, plus the contract they implement
 src/app/        shell and screens: home, calibrate, play, lab, print, about
-tools/          icon generation, service worker generation, bench, smoke test
+tools/          icons, service worker, glyph rendering and training, bench, smoke
 ```
 
 ## Licence

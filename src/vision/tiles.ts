@@ -1,104 +1,13 @@
 /**
- * Tiles: blobs that look like printed pieces, read as characters.
+ * Which blobs of ink might be letters.
  *
- * Runs on top of the occupancy blobs rather than its own segmentation — a tile
- * is a thing on the table first and a letter second.
+ * Only the shape test lives here. Reading the letter is tile-reader.ts, which
+ * runs the trained recogniser; the template matcher this file used to hold was
+ * removed when that replaced it, rather than left behind to rot.
  */
 
 import type { Blob } from "./blobs.js";
-import { GLYPH_SIZE, matchGlyph, normaliseGlyph, type GlyphAtlas, type GlyphMatch } from "./glyph.js";
-import type { CropSource } from "./native-crop.js";
-import type { RectifiedFrame } from "./rectify.js";
 
-export interface Tile extends GlyphMatch {
-  blobId: number;
-  /** Board pixels. */
-  cx: number;
-  cy: number;
-  /** Approximate side length in board pixels. */
-  size: number;
-  /** Mean colour of the tile's ink. */
-  r: number;
-  g: number;
-  b: number;
-}
-
-export interface TileOptions {
-  /** Overrides for what counts as a glyph-shaped blob. */
-  limits?: Partial<GlyphLimits>;
-  /** Reject matches whose margin over the runner-up is below this. */
-  minMargin?: number;
-  /** Reject matches whose absolute agreement is below this. */
-  minScore?: number;
-  /** Where to take crops from; falls back to the rectified board. */
-  source?: CropSource;
-  /** Rotation to correct for, in radians. Zero unless the whole board is askew. */
-  angle?: number;
-  /** How much better a sideways reading must be to beat an upright one. */
-  rotationPenalty?: number;
-}
-
-/** Oversampling factor for the crop, so normalisation has detail to work with. */
-const CROP = GLYPH_SIZE * 2;
-
-export function detectTiles(
-  frame: RectifiedFrame,
-  blobs: Blob[],
-  atlas: GlyphAtlas,
-  opts: TileOptions = {},
-): Tile[] {
-  const limits: GlyphLimits = { ...glyphLimits(frame.size.w, frame.size.h), ...opts.limits };
-  const minMargin = opts.minMargin ?? 0.08;
-  const minScore = opts.minScore ?? 0.42;
-
-  const crop = new Uint8ClampedArray(CROP * CROP);
-  const out: Tile[] = [];
-
-  for (const blob of blobs) {
-    if (glyphCandidate(blob, limits) !== "ok") continue;
-
-    // The window is sized from the bounding box, not from sqrt(area): a glyph
-    // is a stroke, not a filled square, and an "I" has a fraction of the area
-    // of an "M" at the same height. Sizing by area would crop it to a sliver.
-    const bw = blob.maxX - blob.minX + 1;
-    const bh = blob.maxY - blob.minY + 1;
-    const side = Math.max(bw, bh) * 1.3;
-
-    // Deliberately not rotated to the blob's own principal axis.
-    //
-    // That was right when the blob was a tile's body: a square's axis says
-    // which way the tile is lying. It is quite wrong for a glyph, whose axis is
-    // a property of the letter rather than of how it was placed — the principal
-    // axis of an "L" runs diagonally, so deskewing by it turns an upright "L"
-    // into a diagonal smear that matches nothing. Letters on a sheet are
-    // upright, and the matcher tries all four quarter turns for one that is
-    // not, which covers a tile placed sideways without inventing a rotation
-    // from the letterform.
-    const angle = opts.angle ?? 0;
-    if (!opts.source?.sample(blob.cx, blob.cy, side, angle, crop, CROP)) {
-      sampleUpright(frame, blob.cx, blob.cy, side, angle, crop, CROP);
-    }
-
-    const match = matchGlyph(normaliseGlyph(crop, CROP, CROP), atlas, {
-      rotationPenalty: opts.rotationPenalty,
-    });
-    if (!match || match.score < minScore || match.margin < minMargin) continue;
-
-    const ink = meanInk(frame, blob);
-    out.push({
-      ...match,
-      blobId: blob.id,
-      cx: blob.cx,
-      cy: blob.cy,
-      size: side,
-      ...ink,
-    });
-  }
-
-  return out;
-}
-
-/** Fold an angle into [-45, 45) degrees, expressed in radians. */
 /** Why a blob is not a glyph, or "ok" if it might be one. */
 export type GlyphVerdict = "ok" | "too-small" | "too-large" | "wrong-shape" | "hollow";
 
@@ -189,63 +98,3 @@ export function foldAngle(angle: number): number {
   return a;
 }
 
-/** Sample a rotated square window of the luma plane into a fixed-size buffer. */
-function sampleUpright(
-  frame: RectifiedFrame,
-  cx: number,
-  cy: number,
-  side: number,
-  angle: number,
-  out: Uint8ClampedArray,
-  outSize: number,
-): void {
-  const { w, h } = frame.size;
-  const gray = frame.gray;
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-  const step = side / outSize;
-
-  for (let y = 0; y < outSize; y++) {
-    const ly = (y - outSize / 2 + 0.5) * step;
-    for (let x = 0; x < outSize; x++) {
-      const lx = (x - outSize / 2 + 0.5) * step;
-      const sx = Math.round(cx + lx * cos - ly * sin);
-      const sy = Math.round(cy + lx * sin + ly * cos);
-      // Outside the board reads as paper-white rather than black, so the tile
-      // border never looks like ink to the normaliser.
-      out[y * outSize + x] = sx < 0 || sy < 0 || sx >= w || sy >= h ? 255 : gray[sy * w + sx];
-    }
-  }
-}
-
-/** Mean colour of the darker half of the blob — the printed glyph, not the tile stock. */
-function meanInk(frame: RectifiedFrame, blob: Blob): { r: number; g: number; b: number } {
-  const { w } = frame.size;
-  let sum = 0;
-  let n = 0;
-  for (let y = blob.minY; y <= blob.maxY; y++) {
-    for (let x = blob.minX; x <= blob.maxX; x++) {
-      sum += frame.gray[y * w + x];
-      n++;
-    }
-  }
-  const mid = n ? sum / n : 128;
-
-  let r = 0;
-  let g = 0;
-  let b = 0;
-  let count = 0;
-  for (let y = blob.minY; y <= blob.maxY; y++) {
-    for (let x = blob.minX; x <= blob.maxX; x++) {
-      const i = y * w + x;
-      if (frame.gray[i] >= mid) continue;
-      const o = i * 4;
-      r += frame.rgba[o];
-      g += frame.rgba[o + 1];
-      b += frame.rgba[o + 2];
-      count++;
-    }
-  }
-
-  return count ? { r: r / count, g: g / count, b: b / count } : { r: blob.r, g: blob.g, b: blob.b };
-}
