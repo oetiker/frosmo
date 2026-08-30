@@ -119,9 +119,10 @@ floppy paper curls and casts shadows the camera reads as marks.
 ## Reading letters
 
 The letters are read by a small convolutional net that ships inside the bundle:
-24×24 input, two convolution-and-pool stages, one fully connected layer, 36
+24×24 input, two convolution-and-pool stages, one fully connected layer, 37
 outputs. Weights are quantised to int8, which is why the whole recogniser is
-about 60 KB of the download and needs no fetch at play time.
+118 KB of the source and 41 KB of the download, and needs no fetch at play
+time. It reads letters at 95.0% and digits at 93.5% on held-out data.
 
 It is trained offline, on this machine, from the glyphs rendered by the browser
 itself — every sample is one of those glyphs pushed through the degradations a
@@ -142,23 +143,30 @@ no shape filter removes them. A net that knows only 36 characters is *obliged*
 to name every one, and does so at full confidence, honestly: of 36 letters, a
 vertical bar really is most like an L. No threshold recovers from that. On that
 capture the 36-class model turned all twenty-three into letters. This one
-refuses nineteen outright and reads the remaining four at 0.55 confidence or
-less, where the reader's own thresholds take them.
+refuses twenty-two of them.
 
-It is trained on synthetic junk alongside the letters — bars, corners, parallel
-pairs, rounded frames, discs, rims, speckle, blank paper — under the same camera
-degradation, so it cannot separate the classes on image quality instead of on
-shape. Two of those shapes are letters and cannot be taught away: an upright
-stroke is an `I`, and a single frame corner is an `L`. Structural lines are
-therefore always drawn thinner than a glyph stroke ever gets, which is true of
-the printout as well, and single bars are never drawn upright.
+It is trained on synthetic junk alongside the letters — blank paper, filled
+discs, parallel stroke pairs, speckle, shallow arcs, thin frames, slanted bars —
+under the same camera degradation, so it cannot separate the classes on image
+quality instead of on shape.
 
-The trade is real and shows in the table: letter accuracy on held-out synthetic
-data falls from 93.6% to 81.4%, because refusing a letter counts there as
-getting it wrong. On the capture the two models read the same number of
-characters to within one, and differ by nineteen phantom letters. Between a
-measurement of something nobody synthesised and a measurement of the trainer's
-own imagination, the capture wins.
+Which junk gets drawn is the whole game, and getting it wrong is expensive. The
+first model trained this way lost twelve points of letter accuracy, and the
+trainer's confusion table named the casualties: `J T I G O U D L`, every one of
+them lost to *reject* rather than to another letter, and every one of them a
+shape the synthetic junk was drawing. A bar is an `I`. A frame corner is an `L`.
+A ring is an `O` and three-quarters of one is a `C`. Two crossing strokes are an
+`X`. So the families that no letter makes — blank paper, filled discs, parallel
+pairs, speckle — carry the weight, arcs are shallow segments rather than rings,
+crossing strokes are gone, and structural lines are always drawn thinner than a
+glyph stroke ever gets, which is true of the printout too. Drawn that way,
+refusal costs 0.2% of letters instead of 6.7%.
+
+Two shapes still cannot be taught away, because they *are* letters: an upright
+stroke and a letter `I` are the same bitmap once the crop is normalised. One
+border fragment on the capture is still read as an `I`, and that is the right
+trade — refusing it would cost every real `I` on the sheet. What separates them
+is context, and context is not available at this layer.
 
 `test/rig-capture.test.ts` holds every candidate from that capture,
 hand-labelled, as bitmaps rather than the photograph. It is the only test here
