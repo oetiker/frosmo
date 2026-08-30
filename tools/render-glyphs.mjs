@@ -10,18 +10,50 @@
  *   node tools/render-glyphs.mjs
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { chromium } from "playwright";
 
 const OUT = resolve(".glyphs");
 const SIZE = 64;
-const CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-const FONT_STACK = '"Helvetica Neue", Helvetica, Arial, sans-serif';
+// Read from the app rather than repeated here: a renderer that disagrees with
+// the alphabet trains the model to read a set the app never asks for.
+const glyphSource = readFileSync(resolve("src/vision/glyph.ts"), "utf8");
+const pick = (name) => glyphSource.match(new RegExp(`${name} = "([^"]+)"`))?.[1];
+const CHARS = `${pick("DEFAULT_LETTERS")}${pick("DEFAULT_DIGITS")}`;
+if (CHARS.length < 36) throw new Error(`could not read the alphabet from glyph.ts (got "${CHARS}")`);
+// The same file the app ships, loaded into the page here: a renderer that used
+// a system font would teach the model letterforms no printer will ever produce.
+const FONT_FILE = resolve("src/assets/atkinson-hyperlegible-700.woff2");
+const FONT_B64 = readFileSync(FONT_FILE).toString("base64");
+const FONT_STACK = '"Atkinson Hyperlegible"';
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 try {
   const page = await browser.newPage();
+  await page.setContent(`<style>@font-face{
+    font-family:"Atkinson Hyperlegible";font-weight:700;font-style:normal;
+    src:url(data:font/woff2;base64,${FONT_B64}) format("woff2")}</style>`);
+  // Canvas draws with whatever is loaded at the time, silently falling back if
+  // it is not — so wait, and then prove it arrived rather than assume it.
+  await page.evaluate(async () => {
+    await document.fonts.load('700 46px "Atkinson Hyperlegible"');
+    await document.fonts.ready;
+  });
+  const loaded = await page.evaluate(() => {
+    const c = document.createElement("canvas").getContext("2d");
+    c.font = '700 46px "Atkinson Hyperlegible"';
+    const mine = c.measureText("I").width;
+    c.font = "700 46px monospace";
+    return { mine, fallback: c.measureText("I").width };
+  });
+  if (!loaded.mine || Math.abs(loaded.mine - loaded.fallback) < 0.01) {
+    throw new Error(
+      `Atkinson Hyperlegible did not load; canvas would have drawn the fallback ` +
+        `(I is ${loaded.mine}px either way). Refusing to render an atlas the app cannot match.`,
+    );
+  }
+
   const glyphs = await page.evaluate(
     ({ chars, size, fontStack }) => {
       const canvas = document.createElement("canvas");

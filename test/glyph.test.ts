@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normaliseGlyph, otsu } from "../src/vision/glyph.js";
+import { GLYPH_SIZE, normaliseGlyph, otsu } from "../src/vision/glyph.js";
 
 /** Draw a filled rectangle of dark ink on a light field. */
 function inkRect(w: number, h: number, x0: number, y0: number, rw: number, rh: number) {
@@ -58,3 +58,57 @@ describe("normaliseGlyph", () => {
   });
 });
 
+
+describe("normaliseGlyph, dropping what runs off the crop", () => {
+  const N = 48;
+  /** Paper, with a small mark and a bar down one edge. */
+  function crop(withBar: boolean): Uint8ClampedArray {
+    const g = new Uint8ClampedArray(N * N).fill(240);
+    for (let y = 18; y < 30; y++) for (let x = 20; x < 28; x++) g[y * N + x] = 20;
+    if (withBar) for (let y = 0; y < N; y++) for (let x = 0; x < 3; x++) g[y * N + x] = 20;
+    return g;
+  }
+  const inkOf = (b: Uint8Array) => b.reduce((n, v) => n + v, 0);
+
+  it("is unchanged when nothing touches the edge", () => {
+    const plain = normaliseGlyph(crop(false), N, N);
+    const dropped = normaliseGlyph(crop(false), N, N, { dropEdgeTouching: true });
+    expect([...dropped]).toEqual([...plain]);
+  });
+
+  it("throws away a neighbour's frame instead of scaling the glyph to fit beside it", () => {
+    // The bounding box is taken over everything dark, so one stray bar down the
+    // side widens it and the letter shrinks into a corner. Half the alphabet
+    // came back like that before this existed.
+    const alone = normaliseGlyph(crop(false), N, N, { dropEdgeTouching: true });
+    const beside = normaliseGlyph(crop(true), N, N, { dropEdgeTouching: true });
+    expect([...beside]).toEqual([...alone]);
+    // Without the flag the mark is squeezed to a fraction of its proper size.
+    expect(inkOf(normaliseGlyph(crop(true), N, N))).toBeLessThan(inkOf(alone) / 2);
+  });
+
+  it("keeps the dots of an umlaut, which touch nothing", () => {
+    // The reason this is a flood fill and not a margin: the dots float clear of
+    // the letter and clear of the edge, so the crop can stay generous.
+    const g = crop(true);
+    for (let y = 8; y < 12; y++) {
+      for (let x = 20; x < 23; x++) g[y * N + x] = 20;
+      for (let x = 25; x < 28; x++) g[y * N + x] = 20;
+    }
+    const dropped = normaliseGlyph(g, N, N, { dropEdgeTouching: true });
+    // Ink in the top quarter, separated from the body below it: that is what a
+    // diaeresis looks like once normalised, and the bar down the edge is gone.
+    const band = (from: number, to: number) => {
+      let n = 0;
+      for (let y = from; y < to; y++) for (let x = 0; x < GLYPH_SIZE; x++) n += dropped[y * GLYPH_SIZE + x];
+      return n;
+    };
+    expect(band(0, 6)).toBeGreaterThan(0);
+    expect(band(7, 10)).toBe(0);
+    expect(band(10, GLYPH_SIZE)).toBeGreaterThan(0);
+    // And the letter is still centred, not pushed aside by a frame.
+    let left = 0;
+    for (let y = 0; y < GLYPH_SIZE; y++) for (let x = 0; x < 3; x++) left += dropped[y * GLYPH_SIZE + x];
+    expect(left).toBe(0);
+  });
+});

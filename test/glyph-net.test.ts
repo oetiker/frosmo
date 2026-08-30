@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { MODEL_ACCURACY, MODEL_CHARS, readGlyph } from "../src/vision/glyph-net.js";
-import { GLYPH_SIZE } from "../src/vision/glyph.js";
+import { DEFAULT_DIGITS, DEFAULT_LETTERS, GLYPH_SIZE } from "../src/vision/glyph.js";
 import fixture from "./fixtures/rig-candidates.json";
 
-const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+const LETTERS = DEFAULT_LETTERS;
 
 function bitmap(hex: string): Uint8Array {
   const out = new Uint8Array(GLYPH_SIZE * GLYPH_SIZE);
@@ -33,8 +33,10 @@ function noise(seed = 1): Uint8Array {
 
 describe("the committed model", () => {
   it("covers the whole character set", () => {
-    expect(MODEL_CHARS).toHaveLength(36);
-    for (const ch of LETTERS + "0123456789") expect(MODEL_CHARS).toContain(ch);
+    // The alphabet the app asks for, umlauts included — a model trained on a
+    // different set would read a language nobody selected.
+    expect(MODEL_CHARS).toBe(DEFAULT_LETTERS + DEFAULT_DIGITS);
+    for (const ch of "ÄÖÜ") expect(MODEL_CHARS).toContain(ch);
   });
 
   it("is not a broken or undertrained artefact", () => {

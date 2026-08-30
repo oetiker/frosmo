@@ -40,6 +40,9 @@ const BASE = JSON.parse(readFileSync(".glyphs/base.json", "utf8")) as {
 };
 
 const CHARS = [...BASE.chars];
+/** The atlas is letters then digits, so this splits it without a second list. */
+const LETTERS = BASE.chars.replace(/[0-9]/g, "");
+const DIGITS = BASE.chars.replace(/[^0-9]/g, "");
 /**
  * One class beyond the alphabet: "this is not a character".
  *
@@ -91,8 +94,19 @@ function sample(ch: string): Uint8Array {
   const n = BASE.size;
   const crop = new Uint8ClampedArray(CROP * CROP);
 
+  /*
+   * How far off upright a tile lies.
+   *
+   * Mostly a little: someone laying tiles in a row lines them up roughly, and
+   * ten degrees or so covers that. But a child dropping one on the table is
+   * not lining anything up, and the board is rectified before this sees it, so
+   * a tile askew on the table is still askew here. A fifth of the samples are
+   * therefore thrown much further, out to about thirty-five degrees. Past that
+   * it is a quarter turn, and the reader tries those separately rather than
+   * making every sample pay for the rare case.
+   */
   const angle = between(-0.18, 0.18);
-  const shear = between(-0.1, 0.1);
+  const shear = between(-0.14, 0.14);
   // How much of the crop the glyph fills: a tile far from the camera is small
   // in frame, one close to it nearly fills the crop.
   const fill = between(0.42, 0.92);
@@ -183,34 +197,16 @@ function negative(): Uint8Array {
     return (x: number, y: number) => distToSeg(x, y, c - dx, d - dy, c + dx, d + dy) < thick;
   };
 
-  /**
-   * An angle away from vertical — for the single-bar cases only.
-   *
-   * A lone upright stroke is an I, and no amount of training separates one from
-   * an upright piece of tile border: they are the same picture. Teaching the
-   * net to refuse it would cost every real I on the sheet, so the single bar is
-   * drawn slanted or flat, where no letterform competes for it.
-   */
-  const slanted = () => {
-    const a = between(0.5, Math.PI - 0.5);
-    return Math.abs(a - Math.PI / 2) < 0.5 ? (a < Math.PI / 2 ? a - 1 : a + 1) : a;
-  };
-
   /*
-   * The families are not drawn equally often, and the weighting is the whole
-   * game. Four of them — a bar, a corner, a frame, an arc — are shapes that
-   * letters also make: I, L, O, C. Every sample of those teaches the net to
-   * refuse something, and some of what it learns to refuse is a letter. The
-   * first model trained this way lost J, T, I, G, O, U, D and L to the reject
-   * class, in that order, which is exactly that list. A fourth family, two
-   * crossing strokes, is gone entirely: it draws an X. The corners it was there
-   * for are already in the frames.
+   * Bars are drawn at any angle now, upright included.
    *
-   * The other four — blank paper, a filled disc, a pair of parallel strokes,
-   * speckle — are not any letter at all, and cost nothing to learn. They are
-   * also, on a real sheet, most of what actually turns up. So the safe families
-   * carry the weight and the letter-shaped ones are drawn sparingly: enough to
-   * be recognised, not enough to take a letterform with them.
+   * They could not be, once. A lone upright stroke was the letter I, so
+   * teaching the net to refuse one cost every real I on the sheet — the two
+   * are the same bitmap after normalising, and no amount of training separates
+   * them. The tiles are set in Source Code Pro now, which serifs the I, puts a
+   * foot on the 1 and a dot in the 0 precisely so that a reader cannot confuse
+   * them. Nothing in the alphabet is a bare upright any more, so a bare upright
+   * is furniture, and saying so costs nothing.
    */
   const kind = [0, 0, 1, 3, 3, 4, 4, 5, 6, 6, 6, 6, 6, 8, 8, 8][Math.floor(rnd() * 16)];
   let inside: (x: number, y: number) => boolean;
@@ -220,7 +216,7 @@ function negative(): Uint8Array {
     // has never seen emptiness will not be the one to catch what slips past.
     inside = () => false;
   } else if (kind === 1) {
-    inside = bar(slanted(), between(1, 3.4), between(-0.3, 0.3) * CROP);
+    inside = bar(between(0, Math.PI), between(1, 3.4), between(-0.3, 0.3) * CROP);
   } else if (kind === 6) {
     // Two near-parallel strokes with a gap between them: the facing edges of
     // two tiles sitting side by side. On the app's own printout this is by some
@@ -710,7 +706,7 @@ for (let epoch = 0; epoch < EPOCHS; epoch++) {
     console.error("training diverged — lower the learning rate");
     process.exit(1);
   }
-  const { acc } = accuracy(val, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+  const { acc } = accuracy(val, LETTERS);
   // Collapse is not divergence: the loss stays finite, sits near ln(CLASSES),
   // and the net answers one class for everything. Nothing later in the run
   // recovers from it, so there is no point spending twenty more minutes on it.
@@ -723,14 +719,12 @@ for (let epoch = 0; epoch < EPOCHS; epoch++) {
   );
 }
 
-const LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-const DIGITS = "0123456789";
 const all = accuracy(val);
 const letters = accuracy(val, LETTERS);
 const digits = accuracy(val, DIGITS);
 
 console.log(`\nvalidation accuracy`);
-console.log(`  all 36 characters   ${(all.acc * 100).toFixed(2)}%`);
+console.log(`  all ${CHARS.length} characters   ${(all.acc * 100).toFixed(2)}%`);
 console.log(`  letters only        ${(letters.acc * 100).toFixed(2)}%   ← what Spell It sees`);
 console.log(`  digits only         ${(digits.acc * 100).toFixed(2)}%`);
 console.log("\nworst confusions, letters:", letters.worst.map(([a, b, n]) => `${a}→${b} ×${n}`).join("  ") || "none");
