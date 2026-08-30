@@ -65,7 +65,7 @@ describe("one capture from the rig", () => {
     // watch if the bundled font ever changes again.
     let right = 0;
     for (const c of characters) if (readGlyph(bitmap(c.bits))?.char === c.label) right++;
-    expect(right).toBeGreaterThanOrEqual(8);
+    expect(right).toBeGreaterThanOrEqual(9);
   });
 
   it("does not invent characters where there are none", () => {
@@ -73,7 +73,7 @@ describe("one capture from the rig", () => {
     // number is zero — asked to name a border fragment, a 36-way net names one,
     // and at 1.00 confidence.
     const refused = junk.filter((c) => readGlyph(bitmap(c.bits)) === null).length;
-    expect(refused).toBeGreaterThanOrEqual(20);
+    expect(refused).toBeGreaterThanOrEqual(23);
   });
 
   it("still lets a few border fragments through, which is why tiles are found first", () => {
@@ -91,7 +91,7 @@ describe("one capture from the rig", () => {
     const loud = junk
       .map((c) => readGlyph(bitmap(c.bits)))
       .filter((r) => r !== null && r.confidence > 0.6);
-    expect(loud.length).toBeLessThanOrEqual(4);
+    expect(loud.length).toBeLessThanOrEqual(1);
   });
 });
 
@@ -119,9 +119,9 @@ describe("the whole printed sheet, on the rig", () => {
   });
 
   it("reads most of them, in a typeface it was not trained on", () => {
-    // Five wrong of thirty-six. Trained on this very typeface it managed two.
+    // Four wrong of thirty-six, in a typeface the model has never seen.
     const wrong = chars.filter((c) => readGlyph(bitmap(c.bits))?.char !== c.label);
-    expect(wrong.length).toBeLessThanOrEqual(5);
+    expect(wrong.length).toBeLessThanOrEqual(4);
   });
 
   it("reads A, and gives it a margin a caller will accept", () => {

@@ -44,11 +44,13 @@ describe("the committed model", () => {
     // nothing else would notice a training run that went wrong before it was
     // deployed to a tablet on a kitchen table.
     //
-    // Refusing a letter counts here as getting it wrong, so the first number
-    // pays for the third. The first attempt at a reject class paid dearly —
-    // 81.4% on letters, and 6.7 points of that lost to refusal — because its
-    // synthetic junk was shaped like real letterforms. Drawn from shapes no
-    // letter makes, it costs almost nothing.
+    // These sit near 99% and no longer mean much. Once the trainer began
+    // normalising its samples exactly as inference does, the validation set —
+    // built by the same code — stopped containing anything hard, and the score
+    // measures how well the model has learned the generator rather than how
+    // well it reads a tile. It is kept as a guard against a run that went
+    // wrong, not as a target; the numbers that still move for a reason are in
+    // rig-capture.test.ts, against real photographs.
     expect(MODEL_ACCURACY.letters).toBeGreaterThan(0.93);
     expect(MODEL_ACCURACY.digits).toBeGreaterThan(0.9);
     expect(MODEL_ACCURACY.junkRefused).toBeGreaterThan(0.97);
