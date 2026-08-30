@@ -54,8 +54,23 @@ export function drawCard(
   fillQuad(gray, w, h, place, { x: 0, y: 0, w: 1, h: 1 }, paper);
 
   const short = 1 / CARD_ASPECT; // the card's short side in card-x units
+  /*
+   * Sampling follows the projected size, not the size on the card.
+   *
+   * A fixed number of samples is fine for a card filling a quarter of the
+   * frame and leaves gaps in one filling most of it, at exactly the corner the
+   * perspective magnifies most. A ring drawn with gaps in it comes apart in the
+   * ink mask into three stripes, and then the test is measuring the rasteriser
+   * rather than the finder.
+   */
+  const pixelsPerCardUnit = (cx: number, cy: number) => {
+    const a = place(cx, cy);
+    const b = place(cx + 0.01, cy);
+    const c = place(cx, cy + 0.01);
+    return Math.max(Math.hypot(b.x - a.x, b.y - a.y), Math.hypot(c.x - a.x, c.y - a.y)) * 100;
+  };
   const disc = (cx: number, cy: number, r: number, v: number) => {
-    const steps = Math.max(24, Math.round(r * 900));
+    const steps = Math.max(24, Math.round(r * pixelsPerCardUnit(cx, cy) * 1.6));
     for (let i = -steps; i <= steps; i++) {
       for (let j = -steps; j <= steps; j++) {
         const du = (i / steps) * r;
@@ -93,7 +108,15 @@ function fillQuad(
   place: (u: number, v: number) => { x: number; y: number },
   p: { x: number; y: number; w: number; h: number }, v: number,
 ) {
-  const n = 260;
+  // As with the discs: enough samples for the projected size, not the printed
+  // one, so a patch near the camera does not come out striped.
+  const a = place(p.x, p.y);
+  const b = place(p.x + p.w, p.y);
+  const c = place(p.x, p.y + p.h);
+  const n = Math.min(
+    2000,
+    Math.max(120, Math.round(Math.max(Math.hypot(b.x - a.x, b.y - a.y), Math.hypot(c.x - a.x, c.y - a.y)) * 1.6)),
+  );
   for (let i = 0; i <= n; i++)
     for (let j = 0; j <= n; j++)
       put(g, w, h, ...(({ x, y }) => [x, y] as const)(place(p.x + (p.w * i) / n, p.y + (p.h * j) / n)), v);

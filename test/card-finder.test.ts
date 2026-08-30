@@ -7,9 +7,10 @@
  */
 import { describe, expect, it } from "vitest";
 import { findCard, findRings } from "../src/vision/card-finder.js";
-import { CARD_ASPECT } from "../src/vision/card.js";
+import { CARD_ASPECT, FIDUCIALS } from "../src/vision/card.js";
 import type { Quad } from "../src/vision/homography.js";
 import { drawCard, perspective } from "./helpers/card.js";
+import { onRig, RIG_FRAME } from "./helpers/rig.js";
 
 const W = 640;
 const H = 480;
@@ -143,5 +144,58 @@ describe("findRings", () => {
       }
     }
     expect(findRings(gray, W, H)).toHaveLength(0);
+  });
+});
+
+/**
+ * The angle a real rig actually looks at the table from.
+ *
+ * A reflector clipped over a tablet looks along the table nearly as much as at
+ * it, and a camera squashes a plane by the sine of the angle it views it from:
+ * 1.4 to 1 at forty-five degrees, 2 to 1 at thirty. The first version of the
+ * finder allowed 1.7, and on the rig the far marks measured 1.68 and 1.71 —
+ * one found, one not, from the same card, which is exactly what the report
+ * "only the lower two circles get marked" describes.
+ */
+describe("findCard on a real rig's geometry", () => {
+  const { w, h } = RIG_FRAME;
+
+  const shot = (back: number, turn: number, scale = 1, blur = 0) =>
+    drawCard(w, h, onRig(back, turn, scale), { ink: 40, paper: 225, blur });
+
+  it("finds the card where the sheet lies", () => {
+    const card = shot(0, 0);
+    expect(findRings(card.gray, w, h)).toHaveLength(5);
+    expect(findCard(card.gray, w, h)).not.toBeNull();
+  });
+
+  it("finds it however it is turned on the table", () => {
+    for (const turn of [0, 15, 30, 45, 60, 90, 135, 180]) {
+      const card = shot(40, turn);
+      expect(findCard(card.gray, w, h), `turned ${turn}°`).not.toBeNull();
+    }
+  });
+
+  it("finds it as it is pushed further away", () => {
+    for (const back of [0, 40, 80, 120]) {
+      const card = shot(back, 0);
+      expect(findCard(card.gray, w, h), `${back} mm back`).not.toBeNull();
+    }
+  });
+
+  it("finds a smaller print of it, and one that is out of focus", () => {
+    expect(findCard(shot(40, 0, 0.7).gray, w, h)).not.toBeNull();
+    expect(findCard(shot(40, 0, 1, 2).gray, w, h)).not.toBeNull();
+  });
+
+  it("puts the corners back in the card's own order, at that angle", () => {
+    const place = onRig(40, 0);
+    const card = shot(40, 0);
+    const seen = findCard(card.gray, w, h)!;
+    expect(seen).not.toBeNull();
+    for (let i = 0; i < 4; i++) {
+      const want = place(FIDUCIALS[i].cx, FIDUCIALS[i].cy);
+      expect(near(seen.quad[i], want, 12), `corner ${i}`).toBe(true);
+    }
   });
 });
