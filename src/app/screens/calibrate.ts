@@ -23,6 +23,7 @@ import {
   type Orientation,
 } from "../../vision/calibration.js";
 import { describeCameraError, onVideoFrame } from "../../vision/camera.js";
+import { findRings } from "../../vision/card-finder.js";
 import {
   areaFromCorners,
   playAreaMm,
@@ -58,6 +59,7 @@ export function calibrateScreen() {
 
       const orientationLabel = h("span", {}, orientationName(draft.orientation));
       const cardNote = h("div", { class: "cal-caption cal-card-note" }, "");
+      const scanNote = h("div", { class: "cal-scan-note" }, "");
       const aspectPicker = select(
         [
           ["1.333", "4:3 (a sheet of A4 across)"],
@@ -108,6 +110,7 @@ export function calibrateScreen() {
                 h("button", { class: "primary", onclick: () => scan(app) }, "Scan card"),
                 h("button", { class: "ghost", onclick: () => app.go("card") }, "Print the card"),
               ),
+              scanNote,
               cardNote,
               h("div", { class: "cal-preview-wrap" }, preview, h("span", { class: "cal-caption" }, "What the games will see")),
               h(
@@ -211,35 +214,107 @@ export function calibrateScreen() {
        * work — the player has laid a card down and pressed a button — so there
        * is no reason to look at a half-size image for it.
        */
+      /**
+       * Read the printed card, and let it set everything it can.
+       *
+       * Corners, aspect, orientation and the rig profile all at once, because
+       * they are all measurements of the same photograph and a card that set
+       * only the corners would leave the numbers that actually decide whether a
+       * letter is read at their shipped defaults.
+       *
+       * Every outcome, including the failures, is written next to the button.
+       * The first version put them in the status line at the bottom of the
+       * sidebar, below the preview and three more controls, where on a tablet
+       * it is off the bottom of the screen — so a scan that ran, failed and
+       * said exactly why was indistinguishable from a button that did nothing.
+       */
       const scan = (a: import("../app.js").App) => {
-        const shot = a.camera.capture(1);
+        say("Looking for the card…");
+        // Let that paint before the frame is chewed on: everything below is
+        // synchronous, and on a tablet it is long enough to look like a hang.
+        requestAnimationFrame(() => requestAnimationFrame(() => runScan(a)));
+      };
+
+      const runScan = (a: import("../app.js").App) => {
+        let shot;
+        try {
+          shot = a.camera.capture(scanScale(a));
+        } catch (e) {
+          say(`The camera would not give a frame: ${message(e)}`, true);
+          return;
+        }
         if (!shot) {
-          status.textContent = "No camera frame yet.";
+          say("No camera frame yet — wait for the picture to appear.", true);
           return;
         }
-        const seen = scanCard(shot.data, shot.w, shot.h, { resolution: draft.resolution });
+
+        let seen;
+        try {
+          seen = scanCard(shot.data, shot.w, shot.h, { resolution: draft.resolution });
+        } catch (e) {
+          say(`The scan failed: ${message(e)}`, true);
+          return;
+        }
+
         if (!seen) {
-          status.textContent =
-            "No card found. It needs to lie flat, fully in view, with all five rings unobstructed.";
-          status.classList.add("error");
+          // Say what was actually seen. One ring short and five missing are the
+          // same sentence otherwise, and they want opposite things done.
+          const gray = new Uint8ClampedArray(shot.w * shot.h);
+          for (let i = 0; i < gray.length; i++) {
+            const j = i * 4;
+            gray[i] = (shot.data[j] * 77 + shot.data[j + 1] * 150 + shot.data[j + 2] * 29) >> 8;
+          }
+          const rings = findRings(gray, shot.w, shot.h).length;
+          say(
+            rings === 0
+              ? "No card in view. It needs to lie flat under the mirror, printed side up."
+              : `Found ${rings} of the 5 rings. Move the card fully into view and keep anything off it.`,
+            true,
+          );
           return;
         }
-        status.classList.remove("error");
+
         plane = { m: seen.cardToCamera, frame: { w: shot.w, h: shot.h } };
         Object.assign(draft, seen.calibration, { resolution: draft.resolution });
         orientationLabel.textContent = orientationName(draft.orientation);
         showMeasuredAspect();
         table = null;
         resizePreview();
+        renderCardNote();
 
         const p = seen.profile;
         const grew = seen.area.u1 - seen.area.u0 > 0.9;
-        status.textContent = p.warnings.length
-          ? `Card read, but: ${p.warnings.join("; ")}`
-          : grew
-            ? "Card read, and the board grown out to the edge of the view. Nudge the handles if it reaches past what the mirror covers."
-            : "Card read. The board stops at the card — the view has no room to grow into.";
-        renderCardNote();
+        say(
+          p.warnings.length
+            ? `Card read, but: ${p.warnings.join("; ")}`
+            : grew
+              ? "Card read, and the board grown out to the edge of the view."
+              : "Card read. The board stops at the card — no room to grow into.",
+        );
+      };
+
+      /** Put a line where the eye already is, and in the status line too. */
+      const say = (text: string, bad = false) => {
+        scanNote.textContent = text;
+        scanNote.classList.toggle("error", bad);
+        status.textContent = text;
+        status.classList.toggle("error", bad);
+      };
+
+      const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+      /**
+       * How much of the camera frame to read for a scan.
+       *
+       * Not all of it. A ring is about an eighth of the card across, so it is
+       * tens of pixels wide long before the frame is; reading a 12-megapixel
+       * sensor instead buys nothing and asks for a summed-area table of eight
+       * million doubles on a device that may not have it to spare.
+       */
+      const scanScale = (a: import("../app.js").App) => {
+        const { w, h } = a.camera.size;
+        const long = Math.max(w, h);
+        return long > 1600 ? 1600 / long : 1;
       };
 
       /**

@@ -53,7 +53,7 @@ export interface FindCardOptions {
 /** Fraction of its bounding box an annulus of the card's radii covers. */
 const RING_FILL = (Math.PI / 4) * (1 - (FIDUCIAL_INNER / FIDUCIAL_OUTER) ** 2);
 
-interface Ring {
+export interface Ring {
   x: number;
   y: number;
   size: number;
@@ -65,6 +65,23 @@ export function findCard(
   h: number,
   opts: FindCardOptions = {},
 ): CardSighting | null {
+  return choose(findRings(gray, w, h, opts));
+}
+
+/**
+ * Every ring-shaped mark in the frame, before any of them is believed.
+ *
+ * Split out from `findCard` so a failure can be described instead of merely
+ * reported. "No card found" is the same sentence whether the card is face down
+ * in another room or one ring short because a hand is resting on it, and those
+ * want opposite things from the person holding the tablet.
+ */
+export function findRings(
+  gray: Uint8ClampedArray,
+  w: number,
+  h: number,
+  opts: FindCardOptions = {},
+): Ring[] {
   const short = Math.min(w, h);
   const minRing = (opts.minRing ?? 0.02) * short;
   const maxRing = (opts.maxRing ?? 0.25) * short;
@@ -106,7 +123,7 @@ export function findCard(
     rings.push({ x: cx, y: cy, size: Math.max(bw, bh) });
   }
 
-  return choose(rings);
+  return rings;
 }
 
 /**
