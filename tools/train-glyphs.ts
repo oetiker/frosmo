@@ -59,8 +59,8 @@ const INPUT = GLYPH_SIZE * GLYPH_SIZE;
 /** Matches the crop the tile detector takes: glyph plus surroundings. */
 const CROP = GLYPH_SIZE * 2;
 /** Feature maps per convolution. Small on purpose — see the note below. */
-const C1 = 10;
-const C2 = 20;
+const C1 = 12;
+const C2 = 28;
 const POOLED = 6 * 6 * C2;
 
 // ---------------------------------------------------------------- rng
@@ -196,7 +196,23 @@ function negative(): Uint8Array {
     return Math.abs(a - Math.PI / 2) < 0.5 ? (a < Math.PI / 2 ? a - 1 : a + 1) : a;
   };
 
-  const kind = Math.floor(rnd() * 9);
+  /*
+   * The families are not drawn equally often, and the weighting is the whole
+   * game. Four of them — a bar, a corner, a frame, an arc — are shapes that
+   * letters also make: I, L, O, C. Every sample of those teaches the net to
+   * refuse something, and some of what it learns to refuse is a letter. The
+   * first model trained this way lost J, T, I, G, O, U, D and L to the reject
+   * class, in that order, which is exactly that list. A fourth family, two
+   * crossing strokes, is gone entirely: it draws an X. The corners it was there
+   * for are already in the frames.
+   *
+   * The other four — blank paper, a filled disc, a pair of parallel strokes,
+   * speckle — are not any letter at all, and cost nothing to learn. They are
+   * also, on a real sheet, most of what actually turns up. So the safe families
+   * carry the weight and the letter-shaped ones are drawn sparingly: enough to
+   * be recognised, not enough to take a letterform with them.
+   */
+  const kind = [0, 0, 1, 3, 3, 4, 4, 5, 6, 6, 6, 6, 6, 8, 8, 8][Math.floor(rnd() * 16)];
   let inside: (x: number, y: number) => boolean;
 
   if (kind === 0) {
@@ -205,12 +221,7 @@ function negative(): Uint8Array {
     inside = () => false;
   } else if (kind === 1) {
     inside = bar(slanted(), between(1, 3.4), between(-0.3, 0.3) * CROP);
-  } else if (kind === 2) {
-    // Two strokes meeting: the corner of a printed tile.
-    const a = bar(slanted(), between(1, 3), between(-0.3, 0.3) * CROP);
-    const b = bar(slanted(), between(1, 3), between(-0.3, 0.3) * CROP);
-    inside = (x, y) => a(x, y) || b(x, y);
-  } else if (kind === 6 || kind === 7) {
+  } else if (kind === 6) {
     // Two near-parallel strokes with a gap between them: the facing edges of
     // two tiles sitting side by side. On the app's own printout this is by some
     // way the commonest thing the blob finder hands over — and unlike a single
@@ -245,12 +256,21 @@ function negative(): Uint8Array {
     const rx = between(0.25, 0.7) * CROP, ry = between(0.25, 0.7) * CROP;
     inside = (x, y) => ((x - cx) / rx) ** 2 + ((y - cy) / ry) ** 2 < 1;
   } else if (kind === 5) {
-    // The rim of one. This is the shape that reads as O, C or D.
-    const cx = CROP / 2 + between(-0.4, 0.4) * CROP;
-    const cy = CROP / 2 + between(-0.4, 0.4) * CROP;
-    const r = between(0.3, 0.9) * CROP;
-    const thick = between(1.5, 5);
-    inside = (x, y) => Math.abs(Math.hypot(x - cx, y - cy) - r) < thick;
+    // The rim of one, and only ever a piece of it. A whole ring is an O and a
+    // three-quarter one is a C or a G, so the span is kept under a half turn
+    // and the radius large: what is left is a shallow curve, which no letter is.
+    const a0 = between(0, Math.PI * 2);
+    const span = between(0.5, 1.5);
+    const r = between(0.55, 1.3) * CROP;
+    const cx = CROP / 2 - Math.cos(a0 + span / 2) * r;
+    const cy = CROP / 2 - Math.sin(a0 + span / 2) * r;
+    const thick = between(1.5, 4);
+    inside = (x, y) => {
+      if (Math.abs(Math.hypot(x - cx, y - cy) - r) >= thick) return false;
+      let d = Math.atan2(y - cy, x - cx) - a0;
+      while (d < 0) d += Math.PI * 2;
+      return d <= span;
+    };
   } else {
     // Speckle: dust, print noise, a shadow edge broken into pieces.
     const spots: [number, number, number][] = [];
