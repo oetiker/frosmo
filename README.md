@@ -118,17 +118,76 @@ floppy paper curls and casts shadows the camera reads as marks.
 
 ## Reading letters
 
-The letters are read by a small convolutional net that ships inside the bundle:
-24×24 input, two convolution-and-pool stages, one fully connected layer, 37
-outputs. Weights are quantised to int8, which is why the whole recogniser is
-118 KB of the source and 41 KB of the download, and needs no fetch at play
-time. It reads letters at 95.0% and digits at 93.5% on held-out data.
+### Finding them first
+
+Not by looking for ink and asking each blob of it whether it is a letter. That
+question has no answer on a real sheet: a piece of a tile's printed border is
+glyph-sized and glyph-shaped, and an upright fragment of one is the same bitmap
+as a letter `I` once the crop is normalised.
+
+So the tiles are found first. A tile's frame is a closed loop in the ink mask,
+which makes its interior a hole — enclosed, roughly square, of a size the board
+predicts — and labelling the inverse of the mask picks them out. Printed frames
+come out of a threshold broken rather than closed, so the mask is sealed with a
+few rounds of dilation and the result gives those pixels back. Nothing outside a
+tile is ever a candidate, so a border cannot compete with the letter it
+surrounds; it is the thing that located it. Tiles with no frame to find — Osmo's
+own, or Scrabble — fall back to the older path of looking for ink.
+
+Once a tile is known, everything inside it is the glyph. That is what makes an
+umlaut readable at all: the two dots of an `Ä` are not connected to the letter
+under them, and a blob finder drops them for being too small and hands over a
+confident bare `A`.
+
+### The recogniser
+
+A small convolutional net that ships inside the bundle: 24×24 input, two
+convolution-and-pool stages, one fully connected layer, 40 outputs. Weights are
+quantised to int8, so the whole recogniser needs no fetch at play time.
 
 It is trained offline, on this machine, from the glyphs rendered by the browser
 itself — every sample is one of those glyphs pushed through the degradations a
 tablet camera actually applies: perspective, rotation, blur, uneven fill,
 contrast collapse, sensor noise, and a neighbouring tile intruding at the
 border. That is the whole training set; there is no corpus to download.
+
+### The typeface is part of the recogniser
+
+Not a decoration. Two things were wrong with borrowing one from the system.
+
+A stack of font names resolves to whatever the device happens to have — real
+Helvetica on an iPad, an Arial clone on the Linux box where the model is
+trained — so the recogniser was learning one set of letterforms and reading
+another. One bundled subset file ends that, and the renderer refuses to run if
+the font did not load rather than quietly drawing the fallback, which is exactly
+how it went unnoticed.
+
+And the shapes can now be chosen. The face is picked for the characters it keeps
+apart: a serifed `I`, a foot on the `1`, a mark through the `0`. That is not
+tidiness — a plain upright `I` is indistinguishable from a fragment of tile
+border, so with such a face the model cannot be taught that a bare upright is
+furniture without losing every real `I`. With this one it can, and is.
+
+The choice is measurable, and not in the direction you would guess:
+
+| typeface | letters | digits |
+|---|---|---|
+| whatever the system had (Helvetica, or an Arial clone) | 94.4% | 93.3% |
+| Source Code Pro | 90.2% | 91.5% |
+| **Atkinson Hyperlegible** | **94.2%** | **94.3%** |
+
+Source Code Pro fixes all four of those characters and costs four points,
+because it is monospaced: `M` and `W` are squeezed into the same advance width
+as `I` until their diagonals look like `N` and `H`. Atkinson Hyperlegible makes
+the same distinctions and is proportional, so the wide letters stay wide — it
+was drawn by the Braille Institute to be read by people who cannot afford an
+ambiguous character. It is bundled under the OFL; see LICENSE-fonts.
+
+`test/rig-capture.test.ts` measures the other side of this. Its fixtures
+photograph a sheet printed before the app carried its own font, so they are now
+an *out-of-font* test: how gracefully the model degrades on letterforms it has
+never seen, which is the case for Osmo's own tiles and for Scrabble. It reads
+eight of thirteen there against ten when trained on that very typeface.
 
 ### Saying no
 

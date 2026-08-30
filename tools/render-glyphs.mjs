@@ -24,32 +24,32 @@ const CHARS = `${pick("DEFAULT_LETTERS")}${pick("DEFAULT_DIGITS")}`;
 if (CHARS.length < 36) throw new Error(`could not read the alphabet from glyph.ts (got "${CHARS}")`);
 // The same file the app ships, loaded into the page here: a renderer that used
 // a system font would teach the model letterforms no printer will ever produce.
-const FONT_FILE = resolve("src/assets/source-code-pro-700.woff2");
+const FONT_FILE = resolve("src/assets/atkinson-hyperlegible-700.woff2");
 const FONT_B64 = readFileSync(FONT_FILE).toString("base64");
-const FONT_STACK = '"Source Code Pro"';
+const FONT_STACK = '"Atkinson Hyperlegible"';
 
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || undefined });
 try {
   const page = await browser.newPage();
   await page.setContent(`<style>@font-face{
-    font-family:"Source Code Pro";font-weight:700;font-style:normal;
+    font-family:"Atkinson Hyperlegible";font-weight:700;font-style:normal;
     src:url(data:font/woff2;base64,${FONT_B64}) format("woff2")}</style>`);
   // Canvas draws with whatever is loaded at the time, silently falling back if
   // it is not — so wait, and then prove it arrived rather than assume it.
   await page.evaluate(async () => {
-    await document.fonts.load('700 46px "Source Code Pro"');
+    await document.fonts.load('700 46px "Atkinson Hyperlegible"');
     await document.fonts.ready;
   });
   const loaded = await page.evaluate(() => {
     const c = document.createElement("canvas").getContext("2d");
-    c.font = '700 46px "Source Code Pro"';
+    c.font = '700 46px "Atkinson Hyperlegible"';
     const mine = c.measureText("I").width;
     c.font = "700 46px monospace";
     return { mine, fallback: c.measureText("I").width };
   });
   if (!loaded.mine || Math.abs(loaded.mine - loaded.fallback) < 0.01) {
     throw new Error(
-      `Source Code Pro did not load; canvas would have drawn the fallback ` +
+      `Atkinson Hyperlegible did not load; canvas would have drawn the fallback ` +
         `(I is ${loaded.mine}px either way). Refusing to render an atlas the app cannot match.`,
     );
   }

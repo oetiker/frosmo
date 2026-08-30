@@ -1,12 +1,17 @@
-The tile typeface bundled at src/assets/source-code-pro-700.woff2 is a subset of
+The tile typeface bundled at src/assets/atkinson-hyperlegible-700.woff2 is a
+subset of
 
-    Source Code Pro
-    Copyright 2010-2019 Adobe (http://www.adobe.com/), with Reserved Font Name
-    'Source'. All Rights Reserved. Source is a trademark of Adobe in the United
-    States and/or other countries.
+    Atkinson Hyperlegible
+    Copyright 2020 Braille Institute of America, Inc.
 
 licensed under the SIL Open Font License, Version 1.1, the full text of which is
-available at https://openfontlicense.org and https://github.com/adobe-fonts/source-code-pro.
+available at https://openfontlicense.org and alongside the font at
+https://www.brailleinstitute.org/freefont.
+
+It is drawn to make characters hard to confuse with one another — a serifed I, a
+foot on the 1, a mark through the 0 — which is why this app uses it: those are
+exactly the characters a camera cannot otherwise separate from a fragment of a
+tile's printed border.
 
 The font is subset to the 39 characters this app prints on its tile sheet and is
 distributed under the terms of that licence, separately from the MIT licence

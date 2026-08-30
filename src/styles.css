@@ -21,12 +21,12 @@
  * Source Code Pro, (c) Adobe, SIL Open Font License 1.1 — see LICENSE-fonts.
  */
 @font-face {
-  font-family: "Source Code Pro";
+  font-family: "Atkinson Hyperlegible";
   font-weight: 700;
   font-style: normal;
   /* Not `swap`: a fallback here would print the wrong letterforms. */
   font-display: block;
-  src: url("./assets/source-code-pro-700.woff2") format("woff2");
+  src: url("./assets/atkinson-hyperlegible-700.woff2") format("woff2");
 }
 
 /*

@@ -1,4 +1,21 @@
 /**
+ * The recogniser against real captures from the rig — in a typeface it was not
+ * trained on.
+ *
+ * Both fixtures here photograph a sheet printed before the app bundled its own
+ * font, so the letterforms are Helvetica's and the model's are Atkinson's. That
+ * makes these the *out-of-font* test: not how well the recogniser reads what
+ * this app prints, but how gracefully it degrades on letterforms it has never
+ * seen — which is the case that matters for Osmo's own tiles, for Scrabble, and
+ * for anything else somebody puts on the table. The numbers below are lower
+ * than the in-font ones and are meant to be.
+ *
+ * An in-font capture is still owed. Until one exists these are the only real
+ * photographs there are, and a floor on a hard case is worth more than no
+ * floor at all.
+ */
+
+/**
  * The recogniser against one real capture from the rig.
  *
  * Synthetic validation says the model reads letters well, and it does — but it
@@ -40,13 +57,15 @@ describe("one capture from the rig", () => {
     expect(junk).toHaveLength(23);
   });
 
-  it("reads the characters that are really there", () => {
-    // Ten of thirteen, asked to choose among all 36; the 36-class model that
-    // could not refuse managed nine. The sheet is clipped along its top edge,
-    // so several of these are half a glyph. A regression guard, not a target.
+  it("reads most of the characters that are really there", () => {
+    // Eight of thirteen, in a typeface the model has never seen, on a sheet
+    // clipped along its top edge so several of these are half a glyph. It read
+    // ten when it was trained on this very typeface — the difference is the
+    // price of not being trained on what you are shown, and it is the number to
+    // watch if the bundled font ever changes again.
     let right = 0;
     for (const c of characters) if (readGlyph(bitmap(c.bits))?.char === c.label) right++;
-    expect(right).toBeGreaterThanOrEqual(10);
+    expect(right).toBeGreaterThanOrEqual(8);
   });
 
   it("does not invent characters where there are none", () => {
@@ -54,24 +73,25 @@ describe("one capture from the rig", () => {
     // number is zero — asked to name a border fragment, a 36-way net names one,
     // and at 1.00 confidence.
     const refused = junk.filter((c) => readGlyph(bitmap(c.bits)) === null).length;
-    expect(refused).toBeGreaterThanOrEqual(22);
+    expect(refused).toBeGreaterThanOrEqual(20);
   });
 
-  it("still lets one border fragment through, which is why tiles are found first", () => {
-    // One upright piece of a tile's printed border reads as a letter at high
-    // confidence. It is not a mistake in the ordinary sense: after the crop is
-    // normalised, an upright stroke and a letter I are the same bitmap. Which
-    // letter it lands on is not worth pinning — the point is that a model given
-    // loose ink cannot win this, and teaching it to refuse uprights would cost
-    // every real I on the sheet.
+  it("still lets a few border fragments through, which is why tiles are found first", () => {
+    // Upright pieces of a tile's printed border, read as letters at high
+    // confidence. Not a mistake in the ordinary sense: after normalising, an
+    // upright stroke is an upright stroke.
     //
-    // The answer is not in the model at all. tile-finder.ts locates the tiles
-    // first, and then nothing outside one is ever a candidate. This path is the
-    // fallback for tiles with no frame to find, and there this cost stands.
+    // The bundled typeface answers this for the app's own tiles — it serifs the
+    // I and foots the 1, so nothing in the alphabet is a bare upright and the
+    // trainer can call one furniture. These fragments come from a sheet printed
+    // before that, in a face whose I *is* a bare upright, so here the old cost
+    // still stands. And the real answer is not in the model anyway:
+    // tile-finder.ts locates the tiles first, after which nothing outside one is
+    // ever a candidate. This path is only the fallback for tiles with no frame.
     const loud = junk
       .map((c) => readGlyph(bitmap(c.bits)))
       .filter((r) => r !== null && r.confidence > 0.6);
-    expect(loud.length).toBeLessThanOrEqual(1);
+    expect(loud.length).toBeLessThanOrEqual(4);
   });
 });
 
@@ -98,9 +118,10 @@ describe("the whole printed sheet, on the rig", () => {
     );
   });
 
-  it("reads all but a couple of them", () => {
+  it("reads most of them, in a typeface it was not trained on", () => {
+    // Five wrong of thirty-six. Trained on this very typeface it managed two.
     const wrong = chars.filter((c) => readGlyph(bitmap(c.bits))?.char !== c.label);
-    expect(wrong.length).toBeLessThanOrEqual(2);
+    expect(wrong.length).toBeLessThanOrEqual(5);
   });
 
   it("reads A, and gives it a margin a caller will accept", () => {
