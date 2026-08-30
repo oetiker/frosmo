@@ -350,7 +350,6 @@ export class VisionPipeline {
      * fragment of border then competes with the letter beside it.
      */
     const candidates: Candidate[] = [];
-    let fromTiles = false;
     if (this.needs.tiles) {
       this.tileFinder ??= new TileFinder(this.board.w, this.board.h);
       const found = this.tileFinder.find(inkDetector.mask, {
@@ -359,7 +358,6 @@ export class VisionPipeline {
       for (const tile of found) {
         candidates.push({ cx: tile.cx, cy: tile.cy, side: Math.min(tile.w, tile.h) * INTERIOR });
       }
-      fromTiles = found.length > 0;
       if (!found.length) {
         const limits = glyphLimits(this.board.w, this.board.h);
         for (const blob of labelBlobs(inkDetector.mask, {
@@ -375,7 +373,6 @@ export class VisionPipeline {
     }
     const tiles = this.needs.tiles
       ? this.tileReader.read(frame, candidates, {
-          fromTiles,
           alphabet: this.needs.alphabet,
           source: this.tileCropSource(cal) ?? undefined,
           rotationFallback: true,

@@ -160,8 +160,18 @@ function sample(ch: string): Uint8Array {
     }
   }
 
-  // The app's own preprocessing, imported: train on exactly what inference sees.
-  return normaliseGlyph(crop, CROP, CROP);
+  /*
+   * The app's own preprocessing, with the app's own options: train on exactly
+   * what inference sees, and not merely on the same function.
+   *
+   * The border above is still drawn, because a neighbouring tile's frame really
+   * does creep into the crop. But inference flood-fills away anything reaching
+   * the edge before the model is asked, and this did not — so every intruded
+   * sample taught the model to read a glyph squashed into a corner beside a bar,
+   * which is a picture it will now never be shown. Half a dozen letters in a
+   * batch came out that way.
+   */
+  return normaliseGlyph(crop, CROP, CROP, { dropEdgeTouching: true });
 }
 
 /**
