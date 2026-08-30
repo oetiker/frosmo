@@ -121,8 +121,37 @@ describe("TileReader", () => {
     stamp(frame, 100, 60);
     stamp(frame, 240, 180);
     reader.read(frame, [blob(0, 100, 60)], { ...permissive, budget: 1 });
-    expect(reader.read(frame, [blob(0, 240, 180)], { ...permissive, budget: 0 })).toHaveLength(0);
-    expect(reader.read(frame, [blob(0, 240, 180)], { ...permissive, budget: 1 })).toHaveLength(1);
+
+    // The old place lingers: a tile missing for a frame or two is treated as
+    // still there, because a printed frame drops in and out of a threshold on a
+    // board nobody is touching. So the move shows up as both for a moment.
+    const during = reader.read(frame, [blob(0, 240, 180)], { ...permissive, budget: 1 });
+    expect(during.map((r) => Math.round(r.cx)).sort((a, b) => a - b)).toEqual([100, 240]);
+
+    // Once the old place has been absent long enough, only the new one is left.
+    let after = during;
+    for (let f = 0; f < 12; f++) after = reader.read(frame, [blob(0, 240, 180)], { ...permissive, budget: 1 });
+    expect(after.map((r) => Math.round(r.cx))).toEqual([240]);
+  });
+
+  it("looks at a settled tile again eventually", () => {
+    // A glyph read while the sheet was being slid into place is read badly, and
+    // a cache keyed to movement would never disturb it. On the rig a 0 stayed a
+    // J for as long as the board sat still.
+    const reader = new TileReader();
+    const frame = paper();
+    stamp(frame, 100, 60);
+    const tile = blob(0, 100, 60);
+    reader.read(frame, [tile], { ...permissive, budget: 1 });
+    expect(reader.read(frame, [tile], { ...permissive, budget: 0 })).toHaveLength(1);
+
+    // Nothing moves, nothing is re-read, for a good while.
+    for (let f = 0; f < 100; f++) reader.read(frame, [tile], { ...permissive, budget: 0 });
+    const before = reader.cached;
+    // Then it comes round again and needs the budget back.
+    for (let f = 0; f < 60; f++) reader.read(frame, [tile], { ...permissive, budget: 0 });
+    expect(reader.cached).toBeLessThan(before + 1);
+    expect(reader.read(frame, [tile], { ...permissive, budget: 1 })).toHaveLength(1);
   });
 
   it("forgets everything on reset", () => {

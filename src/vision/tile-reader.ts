@@ -117,6 +117,33 @@ const FORGET = 30;
 const RECHECK_REFUSAL = 90;
 const SIDE_TOLERANCE = 0.12;
 
+/**
+ * How long a reading is still reported after its tile stopped being found.
+ *
+ * Finding a tile means finding its frame enclosing a hole, and how much of a
+ * printed frame survives a threshold moves with the light and with the smallest
+ * shift of the paper. Measured on a capture from the rig, nudging the ink
+ * threshold across its plausible range takes the count from 37 tiles to 27 and
+ * back — so on a board nobody is even touching, letters blink out and return.
+ *
+ * A tile that was there a moment ago and has not been seen to leave is still
+ * there. A third of a second is long enough to ride out that flicker and short
+ * enough that lifting a tile does not leave a ghost anyone notices.
+ */
+const LINGER = 8;
+
+/**
+ * How long a reading stands before it is looked at again.
+ *
+ * A reading is only re-taken when its blob moves, which is right nearly always
+ * and wrong in the one case that matters: a glyph read while the sheet was
+ * being slid into place is read badly, and then nothing disturbs it. On the rig
+ * a 0 stayed a J for as long as the board sat still. Every few seconds, look
+ * again — it costs one slot of a budget that is otherwise idle on a settled
+ * board.
+ */
+const RECHECK_READING = 150;
+
 export class TileReader {
   private cache: CacheEntry[] = [];
   private frame = 0;
@@ -167,6 +194,7 @@ export class TileReader {
 
     // Pass one: report everything already known, and collect what is not.
     const unknown: Candidate[] = [];
+    const reported = new Set<CacheEntry>();
     for (const blob of candidates) {
       const side = blob.side;
       const hit = this.find(blob.cx, blob.cy, side);
@@ -174,14 +202,18 @@ export class TileReader {
         hit.lastSeen = now;
         hit.cx = blob.cx;
         hit.cy = blob.cy;
+        const grew = Math.abs(side - hit.side) > hit.side * SIDE_TOLERANCE;
         if (hit.reading) {
           hit.reading.cx = blob.cx;
           hit.reading.cy = blob.cy;
           out.push({ ...hit.reading });
+          reported.add(hit);
+          // Keep it, but look again in a while: a glyph read while the sheet
+          // was moving is read badly, and nothing else would ever disturb it.
+          if (!grew && now < hit.recheck) continue;
+        } else if (!grew && now < hit.recheck) {
           continue;
         }
-        const grew = Math.abs(side - hit.side) > hit.side * SIDE_TOLERANCE;
-        if (!grew && now < hit.recheck) continue;
         this.cache.splice(this.cache.indexOf(hit), 1);
       }
       unknown.push(blob);
@@ -264,10 +296,30 @@ export class TileReader {
         cy: blob.cy,
         size: side,
       };
-      this.cache.push({ reading, cx: blob.cx, cy: blob.cy, side, lastSeen: now, recheck: 0 });
+      const entry: CacheEntry = {
+        reading,
+        cx: blob.cx,
+        cy: blob.cy,
+        side,
+        lastSeen: now,
+        recheck: now + RECHECK_READING,
+      };
+      this.cache.push(entry);
+      reported.add(entry);
       out.push({ ...reading });
     }
     this.cursor += budget;
+
+    /*
+     * A tile whose frame did not survive this frame's threshold is still a
+     * tile. Report what was read there until it has been missing long enough
+     * to believe it is gone — otherwise the board flickers on a sheet nobody
+     * is touching.
+     */
+    for (const entry of this.cache) {
+      if (!entry.reading || reported.has(entry)) continue;
+      if (now - entry.lastSeen <= LINGER) out.push({ ...entry.reading });
+    }
 
     for (let i = this.cache.length - 1; i >= 0; i--) {
       if (now - this.cache[i].lastSeen > FORGET) this.cache.splice(i, 1);
