@@ -129,6 +129,41 @@ tablet camera actually applies: perspective, rotation, blur, uneven fill,
 contrast collapse, sensor noise, and a neighbouring tile intruding at the
 border. That is the whole training set; there is no corpus to download.
 
+### Saying no
+
+There is a thirty-seventh class: *none of these*.
+
+It is the difference between working and not. Photograph the app's own printout
+on a real table and the blob finder hands the recogniser thirty-six candidates,
+of which thirteen are characters. The rest are fragments of the tiles' printed
+borders, the facing edges of two tiles side by side, the rims and bodies of the
+colour tokens, and print speckle — all of them glyph-sized and glyph-shaped, so
+no shape filter removes them. A net that knows only 36 characters is *obliged*
+to name every one, and does so at full confidence, honestly: of 36 letters, a
+vertical bar really is most like an L. No threshold recovers from that. On that
+capture the 36-class model turned all twenty-three into letters. This one
+refuses nineteen outright and reads the remaining four at 0.55 confidence or
+less, where the reader's own thresholds take them.
+
+It is trained on synthetic junk alongside the letters — bars, corners, parallel
+pairs, rounded frames, discs, rims, speckle, blank paper — under the same camera
+degradation, so it cannot separate the classes on image quality instead of on
+shape. Two of those shapes are letters and cannot be taught away: an upright
+stroke is an `I`, and a single frame corner is an `L`. Structural lines are
+therefore always drawn thinner than a glyph stroke ever gets, which is true of
+the printout as well, and single bars are never drawn upright.
+
+The trade is real and shows in the table: letter accuracy on held-out synthetic
+data falls from 93.6% to 81.4%, because refusing a letter counts there as
+getting it wrong. On the capture the two models read the same number of
+characters to within one, and differ by nineteen phantom letters. Between a
+measurement of something nobody synthesised and a measurement of the trainer's
+own imagination, the capture wins.
+
+`test/rig-capture.test.ts` holds every candidate from that capture,
+hand-labelled, as bitmaps rather than the photograph. It is the only test here
+that grades the model on something nobody synthesised.
+
 ```sh
 npm run glyphs:render   # Chromium renders the 36 glyphs → .glyphs/base.json
 npm run glyphs:train    # trains, checks gradients, writes src/vision/glyph-model.json
@@ -137,7 +172,9 @@ npm run glyphs:train    # trains, checks gradients, writes src/vision/glyph-mode
 Two things do most of the work at play time. A game says which characters can
 possibly appear — Spell It only ever wants letters — and that restriction is
 applied to the scores *before* the winner is picked, not as a filter afterwards,
-so `D` can never lose to `0`.
+so `D` can never lose to `0`. Refusal is exempt from it: a game narrowing the
+answer to letters is saying which letters it might see, not promising that what
+it is shown is one.
 
 And each glyph is read once and then cached against its position, because a tile
 that has not moved cannot have changed its mind. Refusals are cached the same
